@@ -24,75 +24,254 @@ select {
 
 .app-shell {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
   padding: 32px;
 }
 
 .hero-card {
-  width: min(760px, 100%);
+  width: min(1180px, 100%);
+  margin: 0 auto;
   background: white;
   border: 1px solid #e7eaf0;
   border-radius: 24px;
-  padding: 48px;
+  padding: 40px;
   box-shadow: 0 18px 60px rgba(23, 32, 51, 0.08);
 }
 
+.top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 32px;
+}
+
 .eyebrow {
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0 0 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #5f6b85;
 }
 
+h1,
+h2 {
+  color: #172033;
+}
+
 h1 {
   margin: 0;
-  font-size: clamp(36px, 6vw, 58px);
-  line-height: 1.02;
+  font-size: clamp(34px, 5vw, 54px);
+  line-height: 1.05;
   letter-spacing: -0.04em;
 }
 
+h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
 .subtitle {
-  margin: 20px 0 0;
-  max-width: 620px;
-  font-size: 18px;
+  margin: 18px 0 0;
+  max-width: 700px;
+  font-size: 17px;
   line-height: 1.6;
   color: #667085;
 }
 
-.status-card {
+.api-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border: 1px solid #e7eaf0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.status-dot.online {
+  background: #12b76a;
+}
+
+.status-dot.offline {
+  background: #f04438;
+}
+
+.upload-panel {
   margin-top: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 20px;
-  border-radius: 16px;
-  background: #f8fafc;
-  border: 1px solid #e7eaf0;
+  gap: 24px;
+  padding: 24px;
+  border-radius: 18px;
+  border: 1px dashed #cfd5df;
+  background: #fafbfc;
 }
 
-.status-label {
+.upload-panel p {
+  margin: 6px 0 0;
   color: #667085;
 }
 
-.status-ok {
-  color: #157347;
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 130px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: #172033;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.status-error {
+.upload-button:hover {
+  background: #27334a;
+}
+
+.upload-button.disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.upload-button input {
+  display: none;
+}
+
+.message {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.error-message {
+  border: 1px solid #fecdca;
+  background: #fef3f2;
   color: #b42318;
 }
 
-@media (max-width: 640px) {
-  .hero-card {
-    padding: 32px 24px;
+.preview-section {
+  margin-top: 36px;
+  border-top: 1px solid #eaecf0;
+  padding-top: 30px;
+}
+
+.preview-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.dataset-stats {
+  display: flex;
+  gap: 12px;
+}
+
+.dataset-stats > div {
+  min-width: 100px;
+  padding: 12px 14px;
+  border: 1px solid #e7eaf0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.dataset-stats span,
+.dataset-stats strong {
+  display: block;
+}
+
+.dataset-stats span {
+  color: #667085;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dataset-stats strong {
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e7eaf0;
+  border-radius: 14px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+th,
+td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid #eef0f4;
+  white-space: nowrap;
+}
+
+th {
+  background: #f8fafc;
+  color: #475467;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+td {
+  color: #344054;
+  font-size: 14px;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.preview-note {
+  margin: 14px 0 0;
+  color: #667085;
+  font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding: 16px;
   }
 
-  .status-card {
+  .hero-card {
+    padding: 28px 20px;
+  }
+
+  .top-row,
+  .upload-panel,
+  .preview-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .dataset-stats {
+    width: 100%;
+  }
+
+  .dataset-stats > div {
+    flex: 1;
   }
 }
