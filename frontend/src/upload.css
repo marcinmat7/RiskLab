@@ -28,10 +28,31 @@
 .preview-block-heading p { margin: 5px 0 0; color: #70809a; font-size: 12px; }
 .sample-badge { flex: 0 0 auto; border: 1px solid #2b4163; border-radius: 999px; background: rgba(79,140,255,.08); color: #8fb9ff; padding: 5px 9px; font-size: 11px; font-weight: 700; }
 .row-number { color: #71809a; font-variant-numeric: tabular-nums; }
+
+.empty-page { min-height: calc(100vh - 60px); display: grid; place-items: center; }
+.empty-state-card { width: min(760px, 100%); text-align: center; padding: 54px 42px 42px; border: 1px solid #20304a; border-radius: 18px; background: radial-gradient(circle at 50% 0%, rgba(79,140,255,.12), transparent 36%), linear-gradient(180deg,#101a2c,#0d1524); box-shadow: 0 24px 60px rgba(0,0,0,.22); }
+.empty-state-card h1 { margin-top: 5px; font-size: clamp(28px, 4vw, 38px); }
+.empty-state-copy { max-width: 590px; margin: 15px auto 0; color: #8391a7; font-size: 15px; line-height: 1.7; }
+.empty-state-action { margin-top: 24px; min-width: 150px; }
+.empty-state-icon { position: relative; width: 86px; height: 86px; margin: 0 auto 20px; border-radius: 22px; background: linear-gradient(145deg,#142544,#0c1629); border: 1px solid #2d4e82; box-shadow: inset 0 0 28px rgba(79,140,255,.08), 0 14px 34px rgba(0,0,0,.22); }
+.empty-bar { position: absolute; bottom: 20px; width: 10px; border-radius: 4px 4px 2px 2px; background: linear-gradient(180deg,#78adff,#397cf0); box-shadow: 0 0 12px rgba(79,140,255,.18); }
+.bar-one { left: 20px; height: 21px; }
+.bar-two { left: 37px; height: 34px; }
+.bar-three { left: 54px; height: 47px; }
+.empty-spark { position: absolute; top: 13px; right: 13px; color: #a9ccff; font-size: 16px; text-shadow: 0 0 10px rgba(169,204,255,.6); }
+.empty-state-steps { margin: 34px auto 0; padding-top: 22px; border-top: 1px solid #1d2b42; display: flex; align-items: center; justify-content: center; gap: 12px; color: #687994; font-size: 12px; }
+.empty-state-steps span:not(.step-line) { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.empty-state-steps strong { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 50%; background: #111e33; border: 1px solid #2a4268; color: #8fb9ff; font-size: 10px; }
+.step-line { width: 38px; height: 1px; background: #263853; }
+
 @keyframes pulse-dot { from { opacity: .45; transform: scale(.85); } to { opacity: 1; transform: scale(1.12); } }
 @media (max-width: 760px) {
   .selected-file-card { width: 100%; }
   .preview-block-heading { align-items: flex-start; flex-direction: column; }
   .file-actions { width: 100%; }
   .file-actions .compact-button { flex: 1; }
+  .empty-page { min-height: auto; padding-top: 40px; }
+  .empty-state-card { padding: 42px 20px 30px; }
+  .empty-state-steps { flex-direction: column; }
+  .step-line { width: 1px; height: 16px; }
 }
