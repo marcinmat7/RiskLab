@@ -5,6 +5,7 @@ description = "FastAPI backend for RiskLab"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.142.2",
+  "python-multipart>=0.0.20,<0.1",
   "uvicorn[standard]>=0.35,<0.36"
 ]
 
