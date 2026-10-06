@@ -1,0 +1,12 @@
+[project]
+name = "risklab-api"
+version = "0.1.0"
+description = "FastAPI backend for RiskLab"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.142.2",
+  "uvicorn[standard]>=0.35,<0.36"
+]
+
+[tool.uvicorn]
+factory = false
