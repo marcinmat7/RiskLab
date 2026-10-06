@@ -5,15 +5,25 @@ type HealthResponse = {
   service: string
 }
 
+type PreviewRow = {
+  row_number: number
+  values: Record<string, string | null>
+}
+
 type DatasetPreview = {
   filename: string
+  file_size_bytes: number | null
   row_count: number
   column_count: number
   columns: string[]
-  preview: Record<string, string | null>[]
+  first_preview: PreviewRow[]
+  random_preview: PreviewRow[]
   delimiter: string
+  warning: string | null
+  max_rows: number
 }
 
+type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
 type Section = 'Overview' | 'Data' | 'Validation' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports'
 
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
@@ -27,13 +37,43 @@ const metrics = [
   { label: 'Default rate', value: '3.2%', delta: '4,015 defaults', tone: 'neutral' },
 ]
 
+const formatFileSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function PreviewTable({ columns, rows }: { columns: string[]; rows: PreviewRow[] }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Row</th>
+            {columns.map((column) => <th key={column}>{column}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.row_number}>
+              <td className="row-number">{row.row_number.toLocaleString()}</td>
+              {columns.map((column) => <td key={`${row.row_number}-${column}`}>{row.values[column] || '—'}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function App() {
   const [activeSection, setActiveSection] = useState<Section>('Overview')
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<DatasetPreview | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [isUploading, setIsUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle')
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -45,16 +85,33 @@ function App() {
       .catch((err: Error) => setHealthError(err.message))
   }, [])
 
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
+    event.target.value = ''
     if (!file) return
+
+    setSelectedFile(file)
+    setPreview(null)
+    setUploadError(null)
+    setUploadStatus('selected')
+  }
+
+  const removeFile = () => {
+    setSelectedFile(null)
+    setPreview(null)
+    setUploadError(null)
+    setUploadStatus('idle')
+  }
+
+  const uploadFile = async () => {
+    if (!selectedFile) return
 
     setUploadError(null)
     setPreview(null)
-    setIsUploading(true)
+    setUploadStatus('uploading')
 
     const formData = new FormData()
-    formData.append('file', file)
+    formData.append('file', selectedFile)
 
     try {
       const response = await fetch('http://localhost:8000/datasets/preview', {
@@ -64,11 +121,10 @@ function App() {
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
       setPreview(body as DatasetPreview)
+      setUploadStatus('ready')
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed.')
-    } finally {
-      setIsUploading(false)
-      event.target.value = ''
+      setUploadStatus('error')
     }
   }
 
@@ -95,23 +151,82 @@ function App() {
         {activeSection === 'Data' ? (
           <section className="page-content">
             <div className="page-heading compact-heading">
-              <div><p className="eyebrow">Dataset</p><h1>Upload validation data</h1><p>Upload a CSV, inspect its structure, then continue to column mapping.</p></div>
+              <div><p className="eyebrow">Dataset</p><h1>Upload validation data</h1><p>Select a CSV, review the file details, then upload it for structural inspection.</p></div>
             </div>
-            <section className="panel upload-panel">
-              <div><h2>Validation dataset</h2><p>CSV only for MVP v0.1. UTF-8 encoding is supported.</p></div>
-              <label className={`primary-button upload-button ${isUploading ? 'disabled' : ''}`}>
-                <input type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={isUploading} />
-                {isUploading ? 'Reading file…' : 'Choose CSV'}
-              </label>
+
+            <section className="panel upload-panel upload-workflow">
+              <div className="upload-copy">
+                <h2>Validation dataset</h2>
+                <p>CSV only for MVP v0.1. UTF-8 encoding is supported. Maximum 1,000,000 data rows.</p>
+              </div>
+
+              {!selectedFile ? (
+                <label className="primary-button upload-button">
+                  <input type="file" accept=".csv,text/csv" onChange={handleFileChange} />
+                  Choose CSV
+                </label>
+              ) : (
+                <div className="selected-file-card">
+                  <div className="file-details">
+                    <span className="file-icon">CSV</span>
+                    <div>
+                      <strong>{selectedFile.name}</strong>
+                      <span>{formatFileSize(selectedFile.size)}</span>
+                    </div>
+                  </div>
+
+                  <div className={`upload-state ${uploadStatus}`}>
+                    <span className="state-dot" />
+                    {uploadStatus === 'selected' && 'Ready to upload'}
+                    {uploadStatus === 'uploading' && 'Uploading…'}
+                    {uploadStatus === 'ready' && 'Ready'}
+                    {uploadStatus === 'error' && 'Upload failed'}
+                  </div>
+
+                  <div className="file-actions">
+                    <label className={`secondary-button compact-button ${uploadStatus === 'uploading' ? 'disabled' : ''}`}>
+                      <input type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={uploadStatus === 'uploading'} />
+                      Replace
+                    </label>
+                    <button className="secondary-button compact-button" onClick={removeFile} disabled={uploadStatus === 'uploading'}>Remove</button>
+                    <button className="primary-button compact-button" onClick={uploadFile} disabled={uploadStatus === 'uploading'}>
+                      {uploadStatus === 'uploading' ? 'Uploading…' : uploadStatus === 'ready' ? 'Upload again' : 'Upload'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
+
             {uploadError && <div className="message error-message">{uploadError}</div>}
+            {preview?.warning && <div className="message warning-message"><strong>Warning:</strong> {preview.warning}</div>}
+
             {preview && (
               <section className="panel preview-section">
                 <div className="preview-header">
-                  <div><p className="eyebrow">Dataset preview</p><h2>{preview.filename}</h2></div>
-                  <div className="dataset-stats"><div><span>Rows</span><strong>{preview.row_count.toLocaleString()}</strong></div><div><span>Columns</span><strong>{preview.column_count}</strong></div></div>
+                  <div><p className="eyebrow">Dataset preview</p><h2>{preview.filename}</h2><p className="preview-meta">Delimiter: <code>{preview.delimiter === '\t' ? 'tab' : preview.delimiter}</code> · Limit: {preview.max_rows.toLocaleString()} rows</p></div>
+                  <div className="dataset-stats">
+                    <div><span>Rows</span><strong>{preview.row_count.toLocaleString()}</strong></div>
+                    <div><span>Columns</span><strong>{preview.column_count}</strong></div>
+                  </div>
                 </div>
-                <div className="table-wrap"><table><thead><tr>{preview.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{preview.preview.map((row, rowIndex) => <tr key={rowIndex}>{preview.columns.map((column) => <td key={`${rowIndex}-${column}`}>{row[column] || '—'}</td>)}</tr>)}</tbody></table></div>
+
+                <div className="preview-block">
+                  <div className="preview-block-heading">
+                    <div><h3>First 10 rows</h3><p>The first {preview.first_preview.length} data rows in the uploaded CSV.</p></div>
+                    <span className="sample-badge">Rows 1–{preview.first_preview.length}</span>
+                  </div>
+                  <PreviewTable columns={preview.columns} rows={preview.first_preview} />
+                </div>
+
+                {preview.random_preview.length > 0 && (
+                  <div className="preview-block">
+                    <div className="preview-block-heading">
+                      <div><h3>Random sample</h3><p>{preview.random_preview.length} randomly selected rows from rows 11 through {preview.row_count.toLocaleString()}.</p></div>
+                      <span className="sample-badge">Random sample</span>
+                    </div>
+                    <PreviewTable columns={preview.columns} rows={preview.random_preview} />
+                  </div>
+                )}
               </section>
             )}
           </section>
@@ -123,7 +238,6 @@ function App() {
             </div>
 
             <div className="tabs"><button className="active">Summary</button><button>Key metrics</button><button>Charts</button><button>Data quality</button><button>Recent findings</button></div>
-
             <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
 
             <div className="chart-grid">
