@@ -52,6 +52,7 @@ type EdaProfile = {
   semantic_type: SemanticType
   missing_count: number
   missing_rate: number
+  sample_missing_count: number
   unique_count: number | null
   unique_count_capped: boolean
   numeric_summary?: {
@@ -707,7 +708,7 @@ function App() {
       const base = profile.numeric_summary
         ? profile.numeric_summary.histogram.map((item) => ({ label: item.label, count: item.count, missing: false }))
         : (profile.categories ?? []).map((item) => ({ label: item.value, count: item.count, missing: false }))
-      const rows = [...base, { label: 'Missing', count: profile.missing_count, missing: true }]
+      const rows = [...base, { label: 'Missing', count: profile.sample_missing_count, missing: true }]
       return {
         backgroundColor: 'transparent',
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
@@ -748,7 +749,7 @@ function App() {
       },
       grid: { left: 58, right: 20, top: 28, bottom: 48 },
       xAxis: { type: 'value', name: profile.column, nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
-      yAxis: { type: 'value', min: 0, max: 1, name: 'CDF', nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a', formatter: (value: number) => Math.round(value * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'CDF', nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
       series: [{
         type: 'line',
         showSymbol: false,
