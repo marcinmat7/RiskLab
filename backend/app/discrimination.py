@@ -282,6 +282,8 @@ async def run_discrimination(
             segment_columns.append(column)
 
     cutoff_datetime = _to_datetime(time_cutoff_date) if time_cutoff_date else None
+    if time_cutoff_date and cutoff_datetime is None:
+        raise HTTPException(status_code=400, detail="Time cut-off must be a valid date.")
     cutoff_key = "__time_cutoff__"
     cutoff_enabled = bool(time_column and cutoff_datetime and time_cutoff_as_segment)
 
