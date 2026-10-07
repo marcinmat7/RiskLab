@@ -268,6 +268,10 @@ async def run_discrimination(
     sensitive_columns = list(cfg.get("sensitiveColumns", []))
     semantic_types: dict[str, str] = cfg.get("semanticTypes", {})
     time_column = cfg.get("timeColumn", "")
+    time_cutoff_date = str(cfg.get("timeCutoffDate", "") or "").strip()
+    time_cutoff_as_segment = bool(cfg.get("timeCutoffAsSegment", False))
+    time_cutoff_before_label = str(cfg.get("timeCutoffBeforeLabel", "Pre cut-off") or "Pre cut-off").strip()
+    time_cutoff_after_label = str(cfg.get("timeCutoffAfterLabel", "Post cut-off") or "Post cut-off").strip()
 
     if not prediction_column or not target_column or not positive_class:
         raise HTTPException(status_code=400, detail="Prediction, target and positive class are required.")
@@ -276,6 +280,12 @@ async def run_discrimination(
     for column in [*population_columns, *sensitive_columns]:
         if column and column not in segment_columns and column not in {prediction_column, target_column, time_column}:
             segment_columns.append(column)
+
+    cutoff_datetime = _to_datetime(time_cutoff_date) if time_cutoff_date else None
+    if time_cutoff_date and cutoff_datetime is None:
+        raise HTTPException(status_code=400, detail="Time cut-off must be a valid date.")
+    cutoff_key = "__time_cutoff__"
+    cutoff_enabled = bool(time_column and cutoff_datetime and time_cutoff_as_segment)
 
     await file.seek(0)
     sample = await file.read(8192)
@@ -346,6 +356,27 @@ async def run_discrimination(
             **meta,
         })
 
+    if cutoff_enabled and cutoff_datetime is not None:
+        cutoff_labels: dict[int, str | None] = {}
+        cutoff_date = cutoff_datetime.date()
+        for index, record in enumerate(records):
+            parsed = record["date"]
+            if parsed is None:
+                cutoff_labels[index] = None
+            elif parsed.date() < cutoff_date:
+                cutoff_labels[index] = time_cutoff_before_label
+            else:
+                cutoff_labels[index] = time_cutoff_after_label
+        label_maps[cutoff_key] = cutoff_labels
+        dimension_meta.append({
+            "column": cutoff_key,
+            "semantic_type": "categorical",
+            "mode": "categories",
+            "bins": [time_cutoff_before_label, time_cutoff_after_label],
+            "display_name": "Time cut-off",
+            "cutoff_date": time_cutoff_date,
+        })
+
     segments = [
         _segment_result(records, column, [column], label_maps)
         for column in segment_columns
@@ -354,6 +385,13 @@ async def run_discrimination(
         _segment_result(records, f"{left} × {right}", [left, right], label_maps)
         for left, right in combinations(segment_columns, 2)
     )
+
+    if cutoff_enabled:
+        segments.append(_segment_result(records, "Time cut-off", [cutoff_key], label_maps))
+        segments.extend(
+            _segment_result(records, f"{column} × Time cut-off", [column, cutoff_key], label_maps)
+            for column in segment_columns
+        )
 
     granularities: dict[str, dict[str, Any]] = {}
     if time_column:
@@ -405,4 +443,10 @@ async def run_discrimination(
             "missing_target": excluded_missing_target,
         },
         "direction": "higher-is-riskier",
+        "time_cutoff": {
+            "date": time_cutoff_date,
+            "as_segment": cutoff_enabled,
+            "before_label": time_cutoff_before_label,
+            "after_label": time_cutoff_after_label,
+        } if time_cutoff_date else None,
     }

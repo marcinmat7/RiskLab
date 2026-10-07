@@ -38,6 +38,10 @@ type ValidationConfig = {
   positiveClass: string
   scoreDirection: ScoreDirection
   timeColumn: string
+  timeCutoffDate: string
+  timeCutoffAsSegment: boolean
+  timeCutoffBeforeLabel: string
+  timeCutoffAfterLabel: string
   populationColumns: string[]
   sensitiveColumns: string[]
   featureColumns: string[]
@@ -181,6 +185,8 @@ type DiscriminationResult = {
     mode: 'quantiles' | 'categories'
     bins: string[]
     edges?: number[]
+    display_name?: string
+    cutoff_date?: string
   }[]
   segment_performance: DiscriminationSegment[]
   time_performance: null | {
@@ -197,6 +203,12 @@ type DiscriminationResult = {
   }
   excluded: { missing_prediction: number; missing_target: number }
   direction: string
+  time_cutoff?: null | {
+    date: string
+    as_segment: boolean
+    before_label: string
+    after_label: string
+  }
 }
 
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
@@ -229,6 +241,10 @@ const initialConfig: ValidationConfig = {
   positiveClass: '',
   scoreDirection: 'lower-risk',
   timeColumn: '',
+  timeCutoffDate: '',
+  timeCutoffAsSegment: false,
+  timeCutoffBeforeLabel: 'Pre cut-off',
+  timeCutoffAfterLabel: 'Post cut-off',
   populationColumns: [],
   sensitiveColumns: [],
   featureColumns: [],
@@ -248,6 +264,26 @@ const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
 
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`
 const formatMetric = (value: number | null | undefined) => value === null || value === undefined ? '—' : Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : value.toLocaleString(undefined, { maximumFractionDigits: 3 })
+
+const timeBucketForDate = (date: string, granularity: TimeGranularity) => {
+  if (!date) return ''
+  const [yearText, monthText, dayText] = date.split('-')
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  if (!year || !month || !day) return ''
+  if (granularity === 'daily') return date
+  if (granularity === 'monthly') return `${yearText}-${monthText}`
+  if (granularity === 'quarterly') return `${year}-Q${Math.floor((month - 1) / 3) + 1}`
+  if (granularity === 'yearly') return String(year)
+  const value = new Date(Date.UTC(year, month - 1, day))
+  const weekday = value.getUTCDay() || 7
+  value.setUTCDate(value.getUTCDate() + 4 - weekday)
+  const isoYear = value.getUTCFullYear()
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1))
+  const week = Math.ceil((((value.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+  return `${isoYear}-W${String(week).padStart(2, '0')}`
+}
 
 const formatFileSize = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
@@ -776,9 +812,23 @@ function App() {
         <section className="panel setup-card optional-card">
           <div className="setup-section-heading"><div><span className="setup-number optional">3</span><div><h2>Optional analysis settings</h2><p>These roles unlock time, representativeness, fairness and challenger-model analyses later.</p></div></div><span className="optional-badge">Optional</span></div>
 
-          <div className="optional-setting">
-            <div className="setting-copy"><h3>Time analysis</h3><p>Select a date or time column for performance and stability analysis over time.</p><UsedBy modules={['EDA', 'Stability']} /></div>
-            <label className="form-field compact-field"><span>Time column</span><select value={validationConfig.timeColumn} onChange={(e) => setValidationConfig({...validationConfig, timeColumn:e.target.value})}><option value="">Not configured</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+          <div className="optional-setting time-analysis-setting">
+            <div className="setting-copy"><h3>Time analysis</h3><p>Select a date or time column for analyses over time. An optional cut-off can be shown consistently across time charts and exposed as a reusable analysis segment.</p><UsedBy modules={['EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments']} /></div>
+            <div className="time-config-stack">
+              <label className="form-field compact-field"><span>Time column</span><select value={validationConfig.timeColumn} onChange={(e) => setValidationConfig({...validationConfig, timeColumn:e.target.value, ...(e.target.value ? {} : { timeCutoffDate:'', timeCutoffAsSegment:false })})}><option value="">Not configured</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+              {validationConfig.timeColumn && (
+                <div className="time-cutoff-config">
+                  <label className="form-field"><span>Time cut-off</span><input type="date" value={validationConfig.timeCutoffDate} onChange={(e) => setValidationConfig({...validationConfig, timeCutoffDate:e.target.value, timeCutoffAsSegment:e.target.value ? validationConfig.timeCutoffAsSegment : false})} /><small>Shown as a vertical dashed marker on time-series charts.</small></label>
+                  <label className="cutoff-segment-toggle"><input type="checkbox" checked={validationConfig.timeCutoffAsSegment} disabled={!validationConfig.timeCutoffDate} onChange={(e) => setValidationConfig({...validationConfig, timeCutoffAsSegment:e.target.checked})} /><span><strong>Treat cut-off as an analysis segment</strong><small>Create reusable pre/post groups for subgroup analyses.</small></span></label>
+                  {validationConfig.timeCutoffDate && validationConfig.timeCutoffAsSegment && (
+                    <div className="cutoff-label-grid">
+                      <label className="form-field"><span>Before label</span><input value={validationConfig.timeCutoffBeforeLabel} onChange={(e) => setValidationConfig({...validationConfig, timeCutoffBeforeLabel:e.target.value})} /></label>
+                      <label className="form-field"><span>After label</span><input value={validationConfig.timeCutoffAfterLabel} onChange={(e) => setValidationConfig({...validationConfig, timeCutoffAfterLabel:e.target.value})} /></label>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="optional-setting stacked">
@@ -1027,6 +1077,14 @@ function App() {
     }
 
     const currentTimeBuckets = edaResult.time_analysis?.granularities[timeGranularity] ?? []
+    const edaCutoffBucket = timeBucketForDate(validationConfig.timeCutoffDate, timeGranularity)
+    const edaCutoffMarkLine = validationConfig.timeCutoffDate && edaCutoffBucket ? {
+      silent: true,
+      symbol: 'none',
+      label: { formatter: `Cut-off · ${validationConfig.timeCutoffDate}`, color: '#9aa9bd', position: 'insideEndTop' as const },
+      lineStyle: { type: 'dashed' as const, width: 1, color: '#9aa9bd' },
+      data: [{ xAxis: edaCutoffBucket }],
+    } : undefined
     const timeMissingOption = (column: string): echarts.EChartsOption => ({
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
@@ -1042,6 +1100,7 @@ function App() {
         data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.missing_rate ?? null),
         lineStyle: { width: 2, color: '#8b99ad' },
         areaStyle: { opacity: .08, color: '#8b99ad' },
+        markLine: edaCutoffMarkLine,
       }],
     })
 
@@ -1057,7 +1116,7 @@ function App() {
       series: [
         { name: 'Min', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.min ?? null), lineStyle: { width: 1, type: 'dashed', color: '#65758d' } },
         { name: 'Max', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.max ?? null), lineStyle: { width: 1, type: 'dashed', color: '#91a0b7' } },
-        { name: 'Mean', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.mean ?? null), lineStyle: { width: 2, color: '#4f8cff' } },
+        { name: 'Mean', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.mean ?? null), lineStyle: { width: 2, color: '#4f8cff' }, markLine: edaCutoffMarkLine },
         { name: 'Median', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.median ?? null), lineStyle: { width: 2, color: '#69e7ad' } },
       ],
     })
@@ -1424,6 +1483,14 @@ function App() {
       ? null
       : timeData?.segments.find((segment) => segment.key === discriminationTimeSegmentKey)
     const timeCategories = timeData?.overall.map((bucket) => bucket.bucket) ?? []
+    const discriminationCutoffBucket = timeBucketForDate(validationConfig.timeCutoffDate, discriminationGranularity)
+    const discriminationCutoffMarkLine = validationConfig.timeCutoffDate && discriminationCutoffBucket ? {
+      silent: true,
+      symbol: 'none',
+      label: { formatter: `Cut-off · ${validationConfig.timeCutoffDate}`, color: '#9aa9bd', position: 'insideEndTop' as const },
+      lineStyle: { type: 'dashed' as const, width: 1, color: '#9aa9bd' },
+      data: [{ xAxis: discriminationCutoffBucket }],
+    } : undefined
 
     const timeOption: echarts.EChartsOption | null = timeData ? {
       backgroundColor: 'transparent',
@@ -1441,8 +1508,9 @@ function App() {
             connectNulls: false,
             data: timeData.overall.map((bucket) => bucket.auc),
             lineStyle: { width: 2, color: '#4f8cff' },
+            markLine: discriminationCutoffMarkLine,
           }]
-        : (selectedTimeSegment?.groups.map((group) => {
+        : (selectedTimeSegment?.groups.map((group, index) => {
             const lookup = new Map(group.buckets.map((bucket) => [bucket.bucket, bucket.auc]))
             return {
               name: group.value,
@@ -1451,6 +1519,7 @@ function App() {
               connectNulls: false,
               data: timeCategories.map((bucket) => lookup.get(bucket) ?? null),
               lineStyle: { width: 2 },
+              markLine: index === 0 ? discriminationCutoffMarkLine : undefined,
             }
           }) ?? []),
     } : null
@@ -1493,7 +1562,7 @@ function App() {
               </>
             )}
             <div className="segment-method-note">
-              {result.segment_dimensions.map((dimension) => <span key={dimension.column}><strong>{dimension.column}</strong>: {dimension.mode === 'quantiles' ? '3 quantile groups' : `${dimension.bins.length} categorical groups`}</span>)}
+              {result.segment_dimensions.map((dimension) => <span key={dimension.column}><strong>{dimension.display_name ?? dimension.column}</strong>: {dimension.mode === 'quantiles' ? '3 quantile groups' : `${dimension.bins.length} categorical groups`}</span>)}
             </div>
           </section>
         )}
