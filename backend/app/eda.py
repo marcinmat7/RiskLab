@@ -13,8 +13,8 @@ from fastapi import File, Form, HTTPException, UploadFile
 
 EDA_SAMPLE_ROWS = 20_000
 MAX_TRACKED_UNIQUES = 10_000
-TOP_CATEGORIES = 10
-MAX_RELATIONSHIP_COLUMNS = 30
+TOP_CATEGORIES = 50
+MAX_RELATIONSHIP_COLUMNS = 80
 
 
 def _is_missing(value: str | None) -> bool:
@@ -84,6 +84,25 @@ def _histogram(values: list[float], bins: int = 12) -> list[dict[str, Any]]:
         }
         for i, count in enumerate(counts)
     ]
+
+
+def _empirical_cdf(values: list[float], points: int = 100) -> list[dict[str, float]]:
+    if not values:
+        return []
+    ordered = sorted(values)
+    if len(ordered) <= points:
+        return [
+            {"x": value, "cdf": (index + 1) / len(ordered)}
+            for index, value in enumerate(ordered)
+        ]
+    result: list[dict[str, float]] = []
+    for index in range(points):
+        position = round(index * (len(ordered) - 1) / (points - 1))
+        result.append({
+            "x": ordered[position],
+            "cdf": (position + 1) / len(ordered),
+        })
+    return result
 
 
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
@@ -321,14 +340,24 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                     "p75": _quantile(values, 0.75),
                     "max": numeric_max.get(column),
                     "histogram": _histogram(values),
+                    "cdf": _empirical_cdf(values),
                 }
         elif semantic not in {"identifier", "text", "ignore"}:
             counts = Counter(sample_non_missing)
             total = sum(counts.values())
-            profile["categories"] = [
+            top = counts.most_common(TOP_CATEGORIES)
+            top_count = sum(count for _, count in top)
+            categories = [
                 {"value": value, "count": count, "share": count / total if total else 0.0}
-                for value, count in counts.most_common(TOP_CATEGORIES)
+                for value, count in top
             ]
+            if total > top_count:
+                categories.append({
+                    "value": "Other",
+                    "count": total - top_count,
+                    "share": (total - top_count) / total if total else 0.0,
+                })
+            profile["categories"] = categories
         elif semantic == "identifier":
             profile["uniqueness_rate"] = (
                 (len(unique_values[column]) / non_missing)
@@ -388,6 +417,7 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                 relationships.append(item)
 
     relationships.sort(key=lambda item: abs(float(item["score"])), reverse=True)
+    relationship_columns = active_columns
 
     population_comparison: list[dict[str, Any]] = []
     for population_column in population_columns:
@@ -513,7 +543,13 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
             "duplicate_rate": duplicate_count / row_count,
         },
         "profiles": profiles,
-        "relationships": relationships[:50],
+        "relationships": relationships,
+        "relationship_columns": relationship_columns,
+        "relationship_columns_total": len([
+            column for column in columns
+            if semantic_types.get(column, "categorical") not in {"identifier", "text", "ignore", "datetime"}
+        ]),
+        "relationship_columns_limit": MAX_RELATIONSHIP_COLUMNS,
         "population_comparison": population_comparison,
         "time_analysis": time_analysis,
         "missingness_diagnostics": missingness_diagnostics,
