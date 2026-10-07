@@ -437,10 +437,15 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                         "p75": _quantile(values, 0.75),
                         "missing_rate": sum(_is_missing(row.get(column)) for row in rows) / len(rows),
                     }
+            column_missing_rates = {
+                column: sum(_is_missing(row.get(column)) for row in rows) / len(rows)
+                for column in columns
+            }
             bucket_rows.append({
                 "bucket": bucket,
                 "observations": len(rows),
                 "missing_rate": missing_cells / total_cells if total_cells else 0.0,
+                "column_missing_rates": column_missing_rates,
                 "variables": variable_stats,
             })
         time_analysis = {
