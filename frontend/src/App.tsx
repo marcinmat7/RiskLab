@@ -48,6 +48,18 @@ type ValidationConfig = {
   semanticTypes: Record<string, SemanticType>
 }
 
+type ValidationConfigFile = {
+  schemaVersion: 1
+  kind: 'risklab-validation-config'
+  validation: ValidationConfig
+}
+
+type ValidationConfigMessage = {
+  tone: 'success' | 'warning' | 'error'
+  title: string
+  details: string[]
+}
+
 type EdaTab = 'Overview' | 'Data quality' | 'Distributions' | 'Relationships' | 'Population comparison' | 'Time analysis' | 'Missingness'
 type TimeGranularity = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
 
@@ -474,6 +486,7 @@ function App() {
   const [discriminationGranularity, setDiscriminationGranularity] = useState<TimeGranularity>('monthly')
   const [discriminationSegmentKey, setDiscriminationSegmentKey] = useState('')
   const [discriminationTimeSegmentKey, setDiscriminationTimeSegmentKey] = useState('overall')
+  const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -496,7 +509,7 @@ function App() {
   }, [preview, validationConfig.targetColumn])
 
   useEffect(() => {
-    if (targetValues.length && !targetValues.includes(validationConfig.positiveClass)) {
+    if (targetValues.length && !validationConfig.positiveClass) {
       setValidationConfig((current) => ({ ...current, positiveClass: targetValues[0] }))
     }
   }, [targetValues, validationConfig.positiveClass])
@@ -526,6 +539,135 @@ function App() {
     setDiscriminationGranularity('monthly')
     setDiscriminationSegmentKey('')
     setDiscriminationTimeSegmentKey('overall')
+    setValidationConfigMessage(null)
+  }
+
+  const invalidateAnalysisResults = () => {
+    setAnalysisStatus(initialStatuses())
+    setLastRun({})
+    setEdaResult(null)
+    setEdaError(null)
+    setDiscriminationResult(null)
+    setDiscriminationError(null)
+    setEdaTab('Overview')
+    setEdaColumn('')
+    setPopulationColumn('')
+    setPopulationReference('')
+    setPopulationComparison('')
+    setPopulationVariable('')
+    setTimeWorkspace([])
+    setDiscriminationSegmentKey('')
+    setDiscriminationTimeSegmentKey('overall')
+  }
+
+  const exportValidationConfig = () => {
+    if (!preview) return
+    const payload: ValidationConfigFile = {
+      schemaVersion: 1,
+      kind: 'risklab-validation-config',
+      validation: validationConfig,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2) + '\n'], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const baseName = (preview.filename || 'dataset').replace(/\.csv$/i, '').replace(/[^a-zA-Z0-9._-]+/g, '_')
+    anchor.href = url
+    anchor.download = `${baseName}_risklab_validation.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    setValidationConfigMessage({ tone: 'success', title: 'Validation configuration exported', details: ['The JSON contains the complete current Validation setup.'] })
+  }
+
+  const importValidationConfig = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !preview) return
+
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<ValidationConfigFile>
+      if (parsed.schemaVersion !== 1 || parsed.kind !== 'risklab-validation-config' || !parsed.validation || typeof parsed.validation !== 'object') {
+        throw new Error('Unsupported RiskLab validation configuration file.')
+      }
+
+      const raw = parsed.validation as Partial<ValidationConfig>
+      const warnings: string[] = []
+      const columns = new Set(preview.columns)
+      const semanticValues = new Set<SemanticType>(semanticTypeOptions.map((option) => option.value))
+
+      const existingColumn = (value: unknown, role: string) => {
+        if (typeof value !== 'string' || !value) return ''
+        if (columns.has(value)) return value
+        warnings.push(`${role}: column "${value}" was not found in the current dataset.`)
+        return ''
+      }
+
+      const existingColumns = (value: unknown, role: string) => {
+        if (!Array.isArray(value)) return []
+        const result: string[] = []
+        value.forEach((item) => {
+          if (typeof item !== 'string') return
+          if (columns.has(item)) result.push(item)
+          else warnings.push(`${role}: column "${item}" was not found and was skipped.`)
+        })
+        return [...new Set(result)]
+      }
+
+      const predictionColumn = existingColumn(raw.predictionColumn, 'Model output')
+      const targetColumn = existingColumn(raw.targetColumn, 'Default indicator')
+      const timeColumn = existingColumn(raw.timeColumn, 'Time')
+      const importedSemantic = raw.semanticTypes && typeof raw.semanticTypes === 'object' ? raw.semanticTypes : {}
+      const semanticTypes = Object.fromEntries(preview.columns.map((column) => {
+        const imported = importedSemantic[column]
+        if (imported && semanticValues.has(imported)) return [column, imported]
+        return [column, validationConfig.semanticTypes[column] ?? suggestSemanticType(preview.column_types[column] ?? 'string')]
+      })) as Record<string, SemanticType>
+
+      Object.keys(importedSemantic).forEach((column) => {
+        if (!columns.has(column)) warnings.push(`Semantic type: column "${column}" was not found and was skipped.`)
+      })
+
+      const predictionType: PredictionType = raw.predictionType === 'score' ? 'score' : 'pd'
+      const scoreDirection: ScoreDirection = raw.scoreDirection === 'higher-risk' ? 'higher-risk' : 'lower-risk'
+      const timeCutoffDate = timeColumn && typeof raw.timeCutoffDate === 'string' ? raw.timeCutoffDate : ''
+      const timeCutoffAsSegment = Boolean(timeColumn && timeCutoffDate && raw.timeCutoffAsSegment)
+
+      const imported: ValidationConfig = {
+        predictionColumn,
+        predictionType,
+        targetColumn,
+        positiveClass: typeof raw.positiveClass === 'string' ? raw.positiveClass : '',
+        scoreDirection,
+        timeColumn,
+        timeCutoffDate,
+        timeCutoffAsSegment,
+        timeCutoffBeforeLabel: typeof raw.timeCutoffBeforeLabel === 'string' && raw.timeCutoffBeforeLabel.trim() ? raw.timeCutoffBeforeLabel : 'Pre cut-off',
+        timeCutoffAfterLabel: typeof raw.timeCutoffAfterLabel === 'string' && raw.timeCutoffAfterLabel.trim() ? raw.timeCutoffAfterLabel : 'Post cut-off',
+        populationColumns: existingColumns(raw.populationColumns, 'Population'),
+        sensitiveColumns: existingColumns(raw.sensitiveColumns, 'Sensitive attribute'),
+        featureColumns: existingColumns(raw.featureColumns, 'Model feature'),
+        semanticTypes,
+      }
+
+      if (predictionColumn && targetColumn && predictionColumn === targetColumn) {
+        warnings.push('Model output and default indicator point to the same column; review the required setup.')
+      }
+
+      setValidationConfig(imported)
+      invalidateAnalysisResults()
+      setValidationConfigMessage({
+        tone: warnings.length ? 'warning' : 'success',
+        title: warnings.length ? 'Configuration imported with warnings' : 'Validation configuration imported',
+        details: warnings.length ? warnings : ['All referenced columns were matched to the current dataset.'],
+      })
+    } catch (err) {
+      setValidationConfigMessage({
+        tone: 'error',
+        title: 'Could not import configuration',
+        details: [err instanceof Error ? err.message : 'The selected file is not a valid RiskLab validation configuration.'],
+      })
+    }
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -760,8 +902,19 @@ function App() {
       <section className="page-content validation-page">
         <div className="analysis-page-header">
           <div><p className="eyebrow">Validation</p><h1>Validation setup</h1><p>Map the uploaded dataset to the roles RiskLab needs before any analysis is run.</p></div>
-          <div className={`analysis-status-pill ${analysisStatus.Validation}`}><span />{statusLabel(analysisStatus.Validation)}</div>
+          <div className="validation-header-actions">
+            <label className="secondary-button config-file-button"><input type="file" accept=".json,application/json" onChange={importValidationConfig} />Import config</label>
+            <button className="secondary-button" onClick={exportValidationConfig}>Export config</button>
+            <div className={`analysis-status-pill ${analysisStatus.Validation}`}><span />{statusLabel(analysisStatus.Validation)}</div>
+          </div>
         </div>
+
+        {validationConfigMessage && (
+          <div className={`validation-config-message ${validationConfigMessage.tone}`}>
+            <div><strong>{validationConfigMessage.title}</strong><button type="button" onClick={() => setValidationConfigMessage(null)} aria-label="Dismiss">×</button></div>
+            {validationConfigMessage.details.length > 0 && <ul>{validationConfigMessage.details.map((detail, index) => <li key={`${detail}-${index}`}>{detail}</li>)}</ul>}
+          </div>
+        )}
 
         <section className="panel setup-card">
           <div className="setup-section-heading"><div><span className="setup-number">1</span><div><h2>Required setup</h2><p>These fields are required before validation can run.</p></div></div></div>

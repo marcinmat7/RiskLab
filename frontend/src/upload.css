@@ -383,3 +383,21 @@
   .time-config-stack { min-width: 0; width: 100%; }
   .cutoff-label-grid { grid-template-columns: 1fr; }
 }
+
+
+.validation-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+.config-file-button { position: relative; overflow: hidden; cursor: pointer; }
+.config-file-button input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.validation-config-message { margin: -4px 0 14px; padding: 12px 14px; border-radius: 10px; border: 1px solid #2b3c56; background: #0d1625; color: #93a3b9; font-size: 11px; line-height: 1.5; }
+.validation-config-message > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.validation-config-message strong { color: #dce6f5; font-size: 12px; }
+.validation-config-message button { border: 0; background: transparent; color: #74849c; font-size: 18px; line-height: 1; padding: 0 2px; }
+.validation-config-message ul { margin: 8px 0 0; padding-left: 18px; }
+.validation-config-message li + li { margin-top: 3px; }
+.validation-config-message.success { border-color: rgba(46,207,136,.22); background: rgba(46,207,136,.055); }
+.validation-config-message.warning { border-color: rgba(245,170,67,.24); background: rgba(245,170,67,.055); }
+.validation-config-message.error { border-color: rgba(255,107,107,.25); background: rgba(255,107,107,.06); }
+
+@media (max-width: 760px) {
+  .validation-header-actions { width: 100%; justify-content: flex-start; }
+}
