@@ -164,11 +164,17 @@ def _numeric_categorical_effect(rows: list[dict[str, str]], numeric: str, catego
         return None
     if len(groups) > 25:
         return None
-    spread = statistics.pstdev(all_values)
-    if spread == 0:
+
+    overall_mean = statistics.fmean(all_values)
+    total_ss = sum((value - overall_mean) ** 2 for value in all_values)
+    if total_ss == 0:
         return None
-    means = [statistics.fmean(values) for values in groups.values() if values]
-    return min((max(means) - min(means)) / spread, 5.0)
+    between_ss = sum(
+        len(values) * (statistics.fmean(values) - overall_mean) ** 2
+        for values in groups.values()
+        if values
+    )
+    return math.sqrt(max(0.0, min(between_ss / total_ss, 1.0)))
 
 
 def _missingness_association(rows: list[dict[str, str]], target: str, other: str, other_type: str) -> tuple[float, str] | None:
@@ -411,7 +417,7 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                 categorical = right if numeric == left else left
                 score = _numeric_categorical_effect(sample_rows, numeric, categorical)
                 if score is not None:
-                    item = {"left": left, "right": right, "kind": "Group mean spread", "score": score}
+                    item = {"left": left, "right": right, "kind": "Correlation ratio η", "score": score}
 
             if item:
                 relationships.append(item)
