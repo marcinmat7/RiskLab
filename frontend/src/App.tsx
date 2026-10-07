@@ -2086,24 +2086,18 @@ function App() {
 
     const status = analysisStatus[section]
     const blocked = !validationReady
-    const unavailable = section === 'Calibration' && validationConfig.predictionType === 'score'
     const copy = analysisCopy[section]
 
     return (
       <section className="page-content analysis-module-page">
         <div className="analysis-page-header">
           <div><p className="eyebrow">{section}</p><h1>{copy.title}</h1><p>{copy.description}</p></div>
-          <div className={`analysis-status-pill ${unavailable ? 'unavailable' : blocked ? 'blocked' : status}`}><span />{unavailable ? 'Not available' : blocked ? 'Blocked' : statusLabel(status)}</div>
+          <div className={`analysis-status-pill ${blocked ? 'blocked' : status}`}><span />{blocked ? 'Blocked' : statusLabel(status)}</div>
         </div>
 
         <section className="panel analysis-run-card">
           <div className="analysis-run-icon" aria-hidden="true"><span>↗</span></div>
-          {unavailable ? (
-            <>
-              <h2>Calibration requires probabilities</h2>
-              <p>The uploaded model output is configured as a score. Calibration analysis becomes available when the output type is Probability of Default.</p>
-            </>
-          ) : blocked ? (
+          {blocked ? (
             <>
               <h2>Complete validation first</h2>
               <p>Run the Validation step to confirm the dataset mapping before this analysis can be executed.</p>
