@@ -1079,40 +1079,87 @@ function App() {
             )}
 
             {edaTab === 'Population comparison' && (!populationEnabled ? renderLocked('population') : (
-              <section className="panel eda-section">
-                <div className="panel-title"><div><h2>Population comparison</h2><p className="eda-muted">Group size and overall missingness for configured population columns.</p></div></div>
-                {edaResult.population_comparison.map((population) => (
-                  <div className="eda-population-block" key={population.column}>
-                    <h3>{population.column}</h3>
-                    <div className="table-wrap"><table><thead><tr><th>Group</th><th>Sample rows</th><th>Share</th><th>Missing cells</th></tr></thead><tbody>{population.groups.map((group) => <tr key={group.value}><td>{group.value}</td><td>{group.sample_rows.toLocaleString()}</td><td>{formatPercent(group.share)}</td><td>{formatPercent(group.missing_rate)}</td></tr>)}</tbody></table></div>
+              <section className="panel eda-section population-analysis">
+                <div className="eda-control-row">
+                  <div><h2>Population comparison</h2><p>PSI is calculated for every eligible variable using the selected reference population. Numeric bins are defined on the reference population; Missing is a separate bin.</p></div>
+                  <div className="population-controls">
+                    <label className="form-field compact-field"><span>Population column</span><select value={activePopulation?.column ?? ''} onChange={(e) => { const next = edaResult.population_comparison.find((item) => item.column === e.target.value); setPopulationColumn(e.target.value); setPopulationReference(next?.references[0]?.reference ?? ''); setPopulationComparison(next?.references[0]?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.references[0]?.comparisons[0]?.variables[0]?.column ?? '') }}>{edaResult.population_comparison.map((population) => <option key={population.column} value={population.column}>{population.column}</option>)}</select></label>
+                    <label className="form-field compact-field"><span>Reference</span><select value={activeReference?.reference ?? ''} onChange={(e) => { const next = activePopulation?.references.find((item) => item.reference === e.target.value); setPopulationReference(e.target.value); setPopulationComparison(next?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.comparisons[0]?.variables[0]?.column ?? '') }}>{activePopulation?.references.map((reference) => <option key={reference.reference} value={reference.reference}>{reference.reference}</option>)}</select></label>
+                    <label className="form-field compact-field"><span>Compare with</span><select value={activeComparison?.comparison ?? ''} onChange={(e) => { const next = activeReference?.comparisons.find((item) => item.comparison === e.target.value); setPopulationComparison(e.target.value); setPopulationVariable(next?.variables[0]?.column ?? '') }}>{activeReference?.comparisons.map((comparison) => <option key={comparison.comparison} value={comparison.comparison}>{comparison.comparison}</option>)}</select></label>
                   </div>
-                ))}
+                </div>
+
+                {activePopulation && <div className="population-group-strip">{activePopulation.groups.map((group) => <div key={group.value}><span>{group.value}</span><strong>{group.sample_rows.toLocaleString()}</strong><small>{formatPercent(group.share)} · missing {formatPercent(group.missing_rate)}</small></div>)}</div>}
+
+                {activeComparison && (
+                  <div className="population-layout">
+                    <div className="population-ranking">
+                      <div className="panel-title"><div><h3>PSI ranking</h3><p className="eda-muted">Highest PSI first. Click a variable to inspect its distributions.</p></div><span>{activeReference?.reference} → {activeComparison.comparison}</span></div>
+                      <div className="table-wrap">
+                        <table className="clickable-table">
+                          <thead><tr><th>Variable</th><th>Type</th><th>PSI</th><th>Signal</th></tr></thead>
+                          <tbody>{sortedPsiVariables.map((variable) => (
+                            <tr key={variable.column} className={activePopulationVariable?.column === variable.column ? 'selected-row' : ''} onClick={() => setPopulationVariable(variable.column)}>
+                              <td>{variable.column}</td><td>{variable.semantic_type}</td><td>{variable.psi.toFixed(4)}</td>
+                              <td><span className={variable.psi >= .25 ? 'eda-signal bad' : variable.psi >= .1 ? 'eda-signal warn' : 'eda-signal good'}>{variable.psi >= .25 ? 'High' : variable.psi >= .1 ? 'Moderate' : 'Low'}</span></td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="population-drilldown">
+                      {activePopulationVariable ? (
+                        <>
+                          <div className="population-drilldown-head"><div><h3>{activePopulationVariable.column}</h3><p>{activeReference?.reference} vs {activeComparison.comparison}</p></div><strong>PSI {activePopulationVariable.psi.toFixed(4)}</strong></div>
+                          <EChart option={populationDistributionOption()} height={430} />
+                        </>
+                      ) : <div className="eda-no-data">Select a variable to inspect its distributions.</div>}
+                    </div>
+                  </div>
+                )}
               </section>
             ))}
 
             {edaTab === 'Time analysis' && (!timeEnabled ? renderLocked('time') : (
-              <section className="panel eda-section">
+              <section className="panel eda-section time-workspace-section">
                 <div className="eda-control-row">
-                  <div><h2>Time analysis</h2><p>Volume, missingness and variable behaviour over the configured time column.</p></div>
-                  <label className="form-field compact-field"><span>Aggregation</span><select value={timeGranularity} onChange={(e) => setTimeGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Change aggregation and run EDA again.</small></label>
+                  <div><h2>Time analysis workspace</h2><p>Change aggregation instantly, add variables to the workspace, then drag or use the add button. Zoom one chart and all time charts stay synchronized.</p></div>
+                  <label className="form-field compact-field"><span>Aggregation</span><select value={timeGranularity} onChange={(e) => setTimeGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Updates immediately — no EDA rerun required.</small></label>
                 </div>
-                {edaResult.time_analysis?.buckets.length ? (
-                  <>
-                    <div className="eda-chart-grid">
-                      <article className="eda-chart-panel"><h3>Observation volume</h3><MiniLineChart data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.observations }))} /></article>
-                      <article className="eda-chart-panel"><h3>Missing cells over time</h3><MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.missing_rate * 100 }))} /></article>
+
+                {edaResult.time_analysis && currentTimeBuckets.length ? (
+                  <div className="time-workspace-layout">
+                    <aside className="time-variable-palette">
+                      <div><h3>Available variables</h3><p>Drag into the workspace or click +.</p></div>
+                      <div className="time-variable-list">{edaResult.time_analysis.numeric_columns.map((column) => (
+                        <button
+                          key={column}
+                          draggable
+                          className={timeWorkspace.includes(column) ? 'time-variable-chip selected' : 'time-variable-chip'}
+                          onDragStart={(event) => event.dataTransfer.setData('text/plain', column)}
+                          onClick={() => addTimeVariable(column)}
+                        ><span>⋮⋮</span>{column}<strong>+</strong></button>
+                      ))}</div>
+                    </aside>
+
+                    <div
+                      className="time-drop-zone"
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => { event.preventDefault(); const column = event.dataTransfer.getData('text/plain'); if (column) addTimeVariable(column) }}
+                    >
+                      {timeWorkspace.length === 0 ? (
+                        <div className="time-empty-drop"><strong>Drop numeric variables here</strong><span>Each variable creates a missingness chart and a min / max / mean / median chart.</span></div>
+                      ) : timeWorkspace.map((column) => (
+                        <article className="time-variable-panel" key={column}>
+                          <div className="time-variable-panel-head"><div><h3>{column}</h3><span>{timeGranularity} aggregation</span></div><button onClick={() => setTimeWorkspace((current) => current.filter((item) => item !== column))}>Remove</button></div>
+                          <div className="time-chart-pair">
+                            <div className="eda-chart-panel"><h4>Missing values</h4><EChart option={timeMissingOption(column)} height={330} group="risklab-time-workspace" /></div>
+                            <div className="eda-chart-panel"><h4>Min / max / mean / median</h4><EChart option={timeStatsOption(column)} height={330} group="risklab-time-workspace" /></div>
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                    <div className="eda-control-row variable-time-control">
-                      <div><h3>Column missingness over time</h3><p className="eda-muted">Track whether data quality changes for a specific variable.</p></div>
-                      <label className="form-field compact-field"><span>Column</span><select value={edaTimeMissingColumn} onChange={(e) => setEdaTimeMissingColumn(e.target.value)}>{edaResult.profiles.map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
-                    </div>
-                    {edaTimeMissingColumn && <MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: (bucket.column_missing_rates[edaTimeMissingColumn] ?? 0) * 100 }))} />}
-                    <div className="eda-control-row variable-time-control">
-                      <div><h3>Variable behaviour over time</h3><p className="eda-muted">Median trend for continuous / ordinal variables.</p></div>
-                      <label className="form-field compact-field"><span>Variable</span><select value={edaTimeVariable} onChange={(e) => setEdaTimeVariable(e.target.value)}>{edaResult.profiles.filter((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type)).map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
-                    </div>
-                    {edaTimeVariable && <MiniLineChart data={edaResult.time_analysis.buckets.filter((bucket) => bucket.variables[edaTimeVariable]).map((bucket) => ({ label: bucket.bucket, value: bucket.variables[edaTimeVariable].median }))} />}
-                  </>
+                  </div>
                 ) : <div className="eda-no-data">No parseable time values were found for {validationConfig.timeColumn}.</div>}
               </section>
             ))}
