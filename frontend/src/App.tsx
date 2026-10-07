@@ -880,11 +880,17 @@ function App() {
 
             {edaTab === 'Data quality' && (
               <section className="panel eda-section">
-                <div className="panel-title"><h2>Column quality</h2><span>{edaResult.profiles.length} columns</span></div>
+                <div className="panel-title"><div><h2>Column quality</h2><p className="eda-muted">Click a column header to sort. Click it again to reverse the order.</p></div><span>{edaResult.profiles.length} columns</span></div>
                 <div className="table-wrap">
-                  <table>
-                    <thead><tr><th>Column</th><th>Semantic type</th><th>Missing</th><th>Unique</th><th>Quality signal</th></tr></thead>
-                    <tbody>{edaResult.profiles.map((profile) => (
+                  <table className="sortable-table">
+                    <thead><tr>
+                      <th><button onClick={() => changeQualitySort('column')}>Column <span>{qualitySort === 'column' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('semantic')}>Semantic type <span>{qualitySort === 'semantic' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('missing')}>Missing <span>{qualitySort === 'missing' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('unique')}>Unique <span>{qualitySort === 'unique' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('quality')}>Quality signal <span>{qualitySort === 'quality' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                    </tr></thead>
+                    <tbody>{sortedProfiles.map((profile) => (
                       <tr key={profile.column}>
                         <td>{profile.column}</td><td>{profile.semantic_type}</td><td>{formatPercent(profile.missing_rate)}</td>
                         <td>{profile.unique_count_capped ? '>10,000' : (profile.unique_count ?? '—')}</td>
@@ -899,7 +905,7 @@ function App() {
             {edaTab === 'Distributions' && (
               <section className="panel eda-section">
                 <div className="eda-control-row">
-                  <div><h2>Column explorer</h2><p>Summary adapts to the semantic type selected in Validation.</p></div>
+                  <div><h2>Column explorer</h2><p>Numeric and categorical distributions include a separate Missing bucket. Log view uses a logarithmic count axis.</p></div>
                   <label className="form-field compact-field"><span>Column</span><select value={edaColumn} onChange={(e) => setEdaColumn(e.target.value)}>{edaResult.profiles.filter((profile) => profile.semantic_type !== 'ignore').map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
                 </div>
                 {activeProfile && (
@@ -919,10 +925,19 @@ function App() {
                           <div><span>P75</span><strong>{formatMetric(activeProfile.numeric_summary.p75)}</strong></div>
                           <div><span>Min / max</span><strong>{formatMetric(activeProfile.numeric_summary.min)} / {formatMetric(activeProfile.numeric_summary.max)}</strong></div>
                         </div>
-                        <MiniBarChart data={activeProfile.numeric_summary.histogram.map((item) => ({ label: item.label, value: item.count }))} />
+                        <div className="eda-chart-grid distribution-grid">
+                          <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
+                          <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
+                        </div>
+                        <article className="eda-chart-panel cdf-panel"><div><h3>Empirical cumulative distribution</h3><p className="eda-muted">CDF is calculated from the EDA reservoir sample.</p></div><EChart option={cdfOption(activeProfile)} height={390} /></article>
                       </>
                     )}
-                    {activeProfile.categories && <MiniBarChart data={activeProfile.categories.map((item) => ({ label: item.value, value: item.count }))} />}
+                    {activeProfile.categories && (
+                      <div className="eda-chart-grid distribution-grid">
+                        <article className="eda-chart-panel"><h3>Category counts · linear scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
+                        <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
+                      </div>
+                    )}
                     {activeProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{activeProfile.uniqueness_rate === null || activeProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(activeProfile.uniqueness_rate)}</strong></div>}
                     {activeProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(activeProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(activeProfile.text_summary.median_length)}</strong>, max <strong>{activeProfile.text_summary.max_length}</strong>.</div>}
                   </div>
@@ -931,9 +946,28 @@ function App() {
             )}
 
             {edaTab === 'Relationships' && (
-              <section className="panel eda-section">
-                <div className="panel-title"><div><h2>Strongest pairwise relationships</h2><p className="eda-muted">Metric depends on semantic types: Pearson correlation, Cramér's V or normalized group-mean spread.</p></div></div>
-                {edaResult.relationships.length ? <div className="table-wrap"><table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.slice(0, 25).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table></div> : <div className="eda-no-data">No eligible pairwise relationships were available.</div>}
+              <section className="panel eda-section relationships-section">
+                <div className="eda-control-row">
+                  <div><h2>Relationship heatmap</h2><p>Numeric view shows signed Pearson correlation. Mixed view shows association strength on a 0–1 scale using |Pearson|, Cramér's V and correlation ratio η.</p></div>
+                  <div className="relationship-controls">
+                    <div className="segmented-control">
+                      <button className={relationshipMode === 'numeric' ? 'active' : ''} onClick={() => { setRelationshipMode('numeric'); setRelationshipFocus('') }}>Numeric correlations</button>
+                      <button className={relationshipMode === 'mixed' ? 'active' : ''} onClick={() => { setRelationshipMode('mixed'); setRelationshipFocus('') }}>All-variable associations</button>
+                    </div>
+                    <input className="relationship-search" value={relationshipSearch} onChange={(e) => setRelationshipSearch(e.target.value)} placeholder="Search variables…" />
+                    <label className="form-field compact-field"><span>Focus variable</span><select value={relationshipFocus} onChange={(e) => setRelationshipFocus(e.target.value)}><option value="">Top associated variables</option>{relationshipBaseColumns.map((column) => <option key={column} value={column}>{column}</option>)}</select></label>
+                  </div>
+                </div>
+                {edaResult.relationship_columns_total > edaResult.relationship_columns_limit && <div className="message warning-message">This dataset has {edaResult.relationship_columns_total} eligible variables. The backend currently computes pairwise relationships for the first {edaResult.relationship_columns_limit}; the heatmap then shows up to 30 at once for readability.</div>}
+                {focusedRelationshipColumns.length ? (
+                  <>
+                    <div className="heatmap-meta">Showing {focusedRelationshipColumns.length} of {relationshipBaseColumns.length} variables. Search or choose a focus variable to navigate large matrices.</div>
+                    <div className="heatmap-scroll"><EChart option={heatmapOption(relationshipMode)} height={Math.max(520, focusedRelationshipColumns.length * 27 + 190)} /></div>
+                    <div className="table-wrap relationship-table">
+                      <table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.filter((item) => relationshipMode === 'mixed' || item.kind === 'Pearson correlation').slice(0, 20).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table>
+                    </div>
+                  </>
+                ) : <div className="eda-no-data">No variables match the current relationship view.</div>}
               </section>
             )}
 
