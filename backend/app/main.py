@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.calibration import run_calibration
 from app.discrimination import run_discrimination
 from app.eda import run_eda
+from app.stability import run_stability
 
 app = FastAPI(title="RiskLab API", version="0.1.0")
 
@@ -206,3 +207,11 @@ async def calibration_run(
     config: str = Form(...),
 ) -> dict[str, object]:
     return await run_calibration(file=file, config=config)
+
+
+@app.post("/stability/run")
+async def stability_run(
+    file: UploadFile = File(...),
+    config: str = Form(...),
+) -> dict[str, object]:
+    return await run_stability(file=file, config=config)
