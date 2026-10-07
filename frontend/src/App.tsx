@@ -987,6 +987,42 @@ function App() {
     }
   }
 
+  const runStability = async () => {
+    if (!selectedFile || !validationReady) return
+    setAnalysisStatus((current) => ({ ...current, Stability: 'running' }))
+    setStabilityError(null)
+
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+    formData.append('config', JSON.stringify(validationConfig))
+
+    try {
+      const response = await fetch('http://localhost:8000/stability/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as StabilityResult
+      setStabilityResult(result)
+
+      const firstSource = result.sources[0]
+      const firstReference = firstSource?.groups[0]?.value ?? ''
+      const firstComparison = firstSource?.groups.find((group) => group.value !== firstReference)?.value ?? ''
+      setStabilitySourceKey(firstSource?.key ?? '')
+      setStabilityReference(firstReference)
+      setStabilityComparison(firstComparison)
+      setStabilityVariable(result.comparisons.find((item) =>
+        item.source_key === firstSource?.key &&
+        item.reference === firstReference &&
+        item.comparison === firstComparison
+      )?.variables[0]?.column ?? result.variables[0]?.column ?? '')
+
+      setAnalysisStatus((current) => ({ ...current, Stability: 'ready' }))
+      setLastRun((current) => ({ ...current, Stability: new Date().toLocaleString() }))
+    } catch (err) {
+      setStabilityError(err instanceof Error ? err.message : 'Stability analysis failed.')
+      setAnalysisStatus((current) => ({ ...current, Stability: 'failed' }))
+    }
+  }
+
   const renderDataPage = () => (
     <section className="page-content">
       <div className="page-heading compact-heading">
