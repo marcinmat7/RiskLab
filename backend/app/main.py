@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.calibration import run_calibration
 from app.discrimination import run_discrimination
 from app.eda import run_eda
 
@@ -197,3 +198,11 @@ async def discrimination_run(
         config=config,
         time_granularity=time_granularity,
     )
+
+
+@app.post("/calibration/run")
+async def calibration_run(
+    file: UploadFile = File(...),
+    config: str = Form(...),
+) -> dict[str, object]:
+    return await run_calibration(file=file, config=config)
