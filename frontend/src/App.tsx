@@ -132,6 +132,61 @@ type EdaResult = {
 }
 
 
+type DiscriminationPoint = { fpr: number; tpr: number; threshold: number }
+type DiscriminationRankRow = {
+  bin: number
+  observations: number
+  defaults: number
+  default_rate: number
+  mean_prediction: number
+  min_prediction: number
+  max_prediction: number
+  cumulative_population: number
+  cumulative_bad_capture: number
+}
+type DiscriminationMetrics = {
+  observations: number
+  defaults: number
+  default_rate: number
+  auc: number
+  gini: number
+  ks: number
+  bad_capture_10: number
+  roc: DiscriminationPoint[]
+  rank_table: DiscriminationRankRow[]
+  cap: { population: number; bad_capture: number }[]
+}
+type DiscriminationResult = {
+  overall: DiscriminationMetrics
+  population_performance: {
+    column: string
+    groups: {
+      value: string
+      observations: number
+      defaults: number
+      default_rate: number
+      auc: number | null
+      gini: number | null
+      ks: number | null
+    }[]
+  }[]
+  time_performance: null | {
+    time_column: string
+    granularity: TimeGranularity
+    buckets: {
+      bucket: string
+      observations: number
+      defaults: number
+      default_rate: number
+      auc: number | null
+      gini: number | null
+      ks: number | null
+    }[]
+  }
+  excluded: { missing_prediction: number; missing_target: number }
+  direction: string
+}
+
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 
@@ -366,6 +421,9 @@ function App() {
   const [populationComparison, setPopulationComparison] = useState('')
   const [populationVariable, setPopulationVariable] = useState('')
   const [timeWorkspace, setTimeWorkspace] = useState<string[]>([])
+  const [discriminationResult, setDiscriminationResult] = useState<DiscriminationResult | null>(null)
+  const [discriminationError, setDiscriminationError] = useState<string | null>(null)
+  const [discriminationGranularity, setDiscriminationGranularity] = useState<TimeGranularity>('monthly')
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -413,6 +471,9 @@ function App() {
     setPopulationComparison('')
     setPopulationVariable('')
     setTimeWorkspace([])
+    setDiscriminationResult(null)
+    setDiscriminationError(null)
+    setDiscriminationGranularity('monthly')
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -534,6 +595,30 @@ function App() {
     } catch (err) {
       setEdaError(err instanceof Error ? err.message : 'EDA failed.')
       setAnalysisStatus((current) => ({ ...current, EDA: 'failed' }))
+    }
+  }
+
+
+  const runDiscrimination = async () => {
+    if (!selectedFile || !validationReady) return
+    setAnalysisStatus((current) => ({ ...current, Discrimination: 'running' }))
+    setDiscriminationError(null)
+
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+    formData.append('config', JSON.stringify(validationConfig))
+    formData.append('time_granularity', discriminationGranularity)
+
+    try {
+      const response = await fetch('http://localhost:8000/discrimination/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      setDiscriminationResult(body as DiscriminationResult)
+      setAnalysisStatus((current) => ({ ...current, Discrimination: 'ready' }))
+      setLastRun((current) => ({ ...current, Discrimination: new Date().toLocaleString() }))
+    } catch (err) {
+      setDiscriminationError(err instanceof Error ? err.message : 'Discrimination analysis failed.')
+      setAnalysisStatus((current) => ({ ...current, Discrimination: 'failed' }))
     }
   }
 
@@ -1215,7 +1300,149 @@ function App() {
     )
   }
 
-  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA'>) => {
+
+  const renderDiscrimination = () => {
+    if (!preview) return <EmptyAnalysisState section="Discrimination" onOpenData={() => setActiveSection('Data')} />
+
+    const status = analysisStatus.Discrimination
+    if (!validationReady) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Discrimination</p><h1>Discrimination</h1><p>Evaluate how well the submitted model ranks defaults above non-defaults.</p></div>
+            <div className="analysis-status-pill blocked"><span />Blocked</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>↗</span></div>
+            <h2>Complete validation first</h2>
+            <p>RiskLab needs the prediction, target, positive class and score direction before discrimination can be calculated.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (!discriminationResult) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Discrimination</p><h1>Discrimination</h1><p>ROC AUC, Gini, KS, CAP / gains, rank ordering and conditional population / time views.</p></div>
+            <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+          </div>
+          {discriminationError && <div className="message error-message">{discriminationError}</div>}
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>↗</span></div>
+            <h2>{status === 'running' ? 'Discrimination analysis is running…' : 'Ready to evaluate ranking performance'}</h2>
+            <p>RiskLab normalizes PD and score direction internally so higher values always represent higher risk.</p>
+            <button className="primary-button" disabled={status === 'running'} onClick={runDiscrimination}>{status === 'running' ? 'Running…' : 'Run discrimination'}</button>
+          </section>
+        </section>
+      )
+    }
+
+    const result = discriminationResult
+    const rocOption: echarts.EChartsOption = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 42, bottom: 48 },
+      xAxis: { type: 'value', min: 0, max: 1, name: 'False positive rate', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'True positive rate', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      series: [
+        { name: 'ROC', type: 'line', showSymbol: false, data: result.overall.roc.map((point) => [point.fpr, point.tpr]), lineStyle: { width: 2, color: '#4f8cff' } },
+        { name: 'Random', type: 'line', showSymbol: false, data: [[0,0],[1,1]], lineStyle: { width: 1, type: 'dashed', color: '#65758d' } },
+      ],
+    }
+
+    const ksOption: echarts.EChartsOption = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 42, bottom: 48 },
+      xAxis: { type: 'category', data: result.overall.roc.map((_, index) => index), axisLabel: { show: false } },
+      yAxis: { type: 'value', min: 0, max: 1, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      series: [
+        { name: 'Bad cumulative', type: 'line', showSymbol: false, data: result.overall.roc.map((point) => point.tpr), lineStyle: { color: '#4f8cff', width: 2 } },
+        { name: 'Good cumulative', type: 'line', showSymbol: false, data: result.overall.roc.map((point) => point.fpr), lineStyle: { color: '#8b99ad', width: 2 } },
+      ],
+    }
+
+    const capOption: echarts.EChartsOption = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 42, bottom: 48 },
+      xAxis: { type: 'value', min: 0, max: 1, name: 'Population share', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'Bad capture', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      series: [
+        { name: 'Model', type: 'line', showSymbol: false, data: result.overall.cap.map((point) => [point.population, point.bad_capture]), lineStyle: { color: '#69e7ad', width: 2 } },
+        { name: 'Random', type: 'line', showSymbol: false, data: [[0,0],[1,1]], lineStyle: { color: '#65758d', type: 'dashed', width: 1 } },
+      ],
+    }
+
+    const timeOption: echarts.EChartsOption | null = result.time_performance ? {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 42, bottom: 62 },
+      xAxis: { type: 'category', data: result.time_performance.buckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, max: 1, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 12, height: 18 }],
+      series: [
+        { name: 'AUC', type: 'line', showSymbol: true, data: result.time_performance.buckets.map((bucket) => bucket.auc), connectNulls: false, lineStyle: { color: '#4f8cff', width: 2 } },
+        { name: 'KS', type: 'line', showSymbol: true, data: result.time_performance.buckets.map((bucket) => bucket.ks), connectNulls: false, lineStyle: { color: '#69e7ad', width: 2 } },
+      ],
+    } : null
+
+    return (
+      <section className="page-content discrimination-page">
+        <div className="analysis-page-header">
+          <div><p className="eyebrow">Discrimination</p><h1>Discrimination</h1><p>Ranking performance for {validationConfig.predictionColumn} against {validationConfig.targetColumn}.</p></div>
+          <div className="eda-header-actions"><div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div><button className="primary-button" disabled={status === 'running'} onClick={runDiscrimination}>{status === 'running' ? 'Running…' : 'Run again'}</button></div>
+        </div>
+        {discriminationError && <div className="message error-message">{discriminationError}</div>}
+
+        <div className="discrimination-kpis">
+          <article className="metric-card"><span>ROC AUC</span><strong>{result.overall.auc.toFixed(3)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
+          <article className="metric-card"><span>Gini</span><strong>{result.overall.gini.toFixed(3)}</strong><small className="neutral">2 × AUC − 1</small></article>
+          <article className="metric-card"><span>KS</span><strong>{result.overall.ks.toFixed(3)}</strong><small className="neutral">Max cumulative separation</small></article>
+          <article className="metric-card"><span>Bad capture @ 10%</span><strong>{formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
+          <article className="metric-card"><span>Default rate</span><strong>{formatPercent(result.overall.default_rate)}</strong><small className="neutral">Positive class: {validationConfig.positiveClass}</small></article>
+        </div>
+
+        <div className="discrimination-chart-grid">
+          <article className="panel discrimination-chart"><div className="panel-title"><h2>ROC curve</h2></div><EChart option={rocOption} height={380} /></article>
+          <article className="panel discrimination-chart"><div className="panel-title"><h2>KS cumulative curves</h2></div><EChart option={ksOption} height={380} /></article>
+        </div>
+
+        <article className="panel discrimination-chart"><div className="panel-title"><div><h2>CAP / cumulative gains</h2><p className="eda-muted">Shows how quickly the riskiest observations capture observed defaults.</p></div></div><EChart option={capOption} height={390} /></article>
+
+        <section className="panel discrimination-section">
+          <div className="panel-title"><div><h2>Rank ordering</h2><p className="eda-muted">Decile 1 contains the highest-risk observations after score-direction normalization.</p></div></div>
+          <div className="table-wrap"><table><thead><tr><th>Decile</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean risk score</th><th>Cum. bad capture</th></tr></thead><tbody>{result.overall.rank_table.map((row) => <tr key={row.bin}><td>{row.bin}</td><td>{row.observations.toLocaleString()}</td><td>{row.defaults.toLocaleString()}</td><td>{formatPercent(row.default_rate)}</td><td>{formatMetric(row.mean_prediction)}</td><td>{formatPercent(row.cumulative_bad_capture)}</td></tr>)}</tbody></table></div>
+        </section>
+
+        {result.population_performance.map((population) => (
+          <section className="panel discrimination-section" key={population.column}>
+            <div className="panel-title"><div><h2>Performance by {population.column}</h2><p className="eda-muted">Groups with only one target class cannot produce AUC / Gini / KS.</p></div></div>
+            <div className="table-wrap"><table><thead><tr><th>Group</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>AUC</th><th>Gini</th><th>KS</th></tr></thead><tbody>{population.groups.map((group) => <tr key={group.value}><td>{group.value}</td><td>{group.observations.toLocaleString()}</td><td>{group.defaults.toLocaleString()}</td><td>{formatPercent(group.default_rate)}</td><td>{formatMetric(group.auc)}</td><td>{formatMetric(group.gini)}</td><td>{formatMetric(group.ks)}</td></tr>)}</tbody></table></div>
+          </section>
+        ))}
+
+        {result.time_performance && (
+          <section className="panel discrimination-section">
+            <div className="eda-control-row"><div><h2>Performance over time</h2><p>AUC and KS for each period. Periods with only one target class are left blank.</p></div><label className="form-field compact-field"><span>Aggregation</span><select value={discriminationGranularity} onChange={(e) => setDiscriminationGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Run again after changing aggregation.</small></label></div>
+            {timeOption && <EChart option={timeOption} height={420} />}
+          </section>
+        )}
+
+        {(result.excluded.missing_prediction > 0 || result.excluded.missing_target > 0) && <div className="eda-sample-note">Excluded rows: {result.excluded.missing_prediction.toLocaleString()} missing prediction, {result.excluded.missing_target.toLocaleString()} missing target.</div>}
+        <div className="eda-footer-meta">Last run: {lastRun.Discrimination ?? '—'}</div>
+      </section>
+    )
+  }
+
+  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA' | 'Discrimination'>) => {
     if (!preview) return <EmptyAnalysisState section={section} onOpenData={() => setActiveSection('Data')} />
 
     const status = analysisStatus[section]
@@ -1288,7 +1515,8 @@ function App() {
         {activeSection === 'Data' && renderDataPage()}
         {activeSection === 'Validation' && renderValidation()}
         {activeSection === 'EDA' && renderEda()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && renderAnalysisPage(activeSection)}
+        {activeSection === 'Discrimination' && renderDiscrimination()}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
