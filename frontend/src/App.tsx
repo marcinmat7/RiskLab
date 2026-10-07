@@ -866,6 +866,67 @@ function App() {
       }
     }
 
+    const activePopulation = edaResult.population_comparison.find((item) => item.column === populationColumn) ?? edaResult.population_comparison[0]
+    const activeReference = activePopulation?.references.find((item) => item.reference === populationReference) ?? activePopulation?.references[0]
+    const activeComparison = activeReference?.comparisons.find((item) => item.comparison === populationComparison) ?? activeReference?.comparisons[0]
+    const activePopulationVariable = activeComparison?.variables.find((item) => item.column === populationVariable) ?? activeComparison?.variables[0]
+    const sortedPsiVariables = activeComparison ? [...activeComparison.variables].sort((a, b) => b.psi - a.psi) : []
+
+    const populationDistributionOption = (): echarts.EChartsOption => {
+      const variable = activePopulationVariable
+      const rows = variable?.distribution ?? []
+      return {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+        grid: { left: 58, right: 20, top: 42, bottom: 90 },
+        xAxis: { type: 'category', data: rows.map((row) => row.label), axisLabel: { color: '#71809a', rotate: 30, interval: 0, hideOverlap: true } },
+        yAxis: { type: 'value', name: 'Share', max: 1, axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+        series: [
+          { name: activeReference?.reference ?? 'Reference', type: 'bar', data: rows.map((row) => row.reference_share), itemStyle: { color: '#4f8cff' }, barMaxWidth: 34 },
+          { name: activeComparison?.comparison ?? 'Comparison', type: 'bar', data: rows.map((row) => row.comparison_share), itemStyle: { color: '#8b99ad' }, barMaxWidth: 34 },
+        ],
+      }
+    }
+
+    const currentTimeBuckets = edaResult.time_analysis?.granularities[timeGranularity] ?? []
+    const timeMissingOption = (column: string): echarts.EChartsOption => ({
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      grid: { left: 58, right: 18, top: 28, bottom: 66 },
+      xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'Missing', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
+      series: [{
+        name: 'Missing %',
+        type: 'line',
+        showSymbol: false,
+        data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.missing_rate ?? null),
+        lineStyle: { width: 2, color: '#8b99ad' },
+        areaStyle: { opacity: .08, color: '#8b99ad' },
+      }],
+    })
+
+    const timeStatsOption = (column: string): echarts.EChartsOption => ({
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 62, right: 18, top: 42, bottom: 66 },
+      xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', name: column, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
+      series: [
+        { name: 'Min', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.min ?? null), lineStyle: { width: 1, type: 'dashed', color: '#65758d' } },
+        { name: 'Max', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.max ?? null), lineStyle: { width: 1, type: 'dashed', color: '#91a0b7' } },
+        { name: 'Mean', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.mean ?? null), lineStyle: { width: 2, color: '#4f8cff' } },
+        { name: 'Median', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.median ?? null), lineStyle: { width: 2, color: '#69e7ad' } },
+      ],
+    })
+
+    const addTimeVariable = (column: string) => {
+      setTimeWorkspace((current) => current.includes(column) ? current : [...current, column])
+    }
+
     const renderLocked = (kind: 'population' | 'time') => (
       <section className="panel eda-locked-card">
         <div className="analysis-run-icon" aria-hidden="true"><span>🔒</span></div>
