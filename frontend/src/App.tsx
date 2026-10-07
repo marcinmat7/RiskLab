@@ -91,17 +91,34 @@ type EdaResult = {
   population_comparison: {
     column: string
     groups: { value: string; sample_rows: number; share: number; missing_rate: number }[]
+    references: {
+      reference: string
+      comparisons: {
+        comparison: string
+        variables: {
+          column: string
+          semantic_type: SemanticType
+          psi: number
+          distribution: { label: string; reference_share: number; comparison_share: number }[]
+        }[]
+      }[]
+    }[]
   }[]
   time_analysis: null | {
     time_column: string
-    granularity: string
-    buckets: {
+    numeric_columns: string[]
+    granularities: Record<TimeGranularity, {
       bucket: string
       observations: number
       missing_rate: number
-      column_missing_rates: Record<string, number>
-      variables: Record<string, { mean: number; median: number; p25: number | null; p75: number | null; missing_rate: number }>
-    }[]
+      variables: Record<string, {
+        min: number | null
+        max: number | null
+        mean: number | null
+        median: number | null
+        missing_rate: number
+      }>
+    }[]>
   }
   missingness_diagnostics: {
     column: string
@@ -254,12 +271,16 @@ function MultiColumnPicker({
 
 
 
-function EChart({ option, height = 360 }: { option: echarts.EChartsOption; height?: number }) {
+function EChart({ option, height = 360, group }: { option: echarts.EChartsOption; height?: number; group?: string }) {
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!ref.current) return
     const chart = echarts.init(ref.current)
+    if (group) {
+      chart.group = group
+      echarts.connect(group)
+    }
     chart.setOption(option)
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(ref.current)
@@ -267,7 +288,7 @@ function EChart({ option, height = 360 }: { option: echarts.EChartsOption; heigh
       observer.disconnect()
       chart.dispose()
     }
-  }, [option])
+  }, [option, group])
 
   return <div ref={ref} className="echart" style={{ height }} />
 }
@@ -340,6 +361,11 @@ function App() {
   const [relationshipSearch, setRelationshipSearch] = useState('')
   const [relationshipMode, setRelationshipMode] = useState<'numeric' | 'mixed'>('numeric')
   const [relationshipFocus, setRelationshipFocus] = useState('')
+  const [populationColumn, setPopulationColumn] = useState('')
+  const [populationReference, setPopulationReference] = useState('')
+  const [populationComparison, setPopulationComparison] = useState('')
+  const [populationVariable, setPopulationVariable] = useState('')
+  const [timeWorkspace, setTimeWorkspace] = useState<string[]>([])
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -382,6 +408,11 @@ function App() {
     setRelationshipSearch('')
     setRelationshipMode('numeric')
     setRelationshipFocus('')
+    setPopulationColumn('')
+    setPopulationReference('')
+    setPopulationComparison('')
+    setPopulationVariable('')
+    setTimeWorkspace([])
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -484,6 +515,20 @@ function App() {
       setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
       setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
       setEdaTimeMissingColumn((current) => current || result.profiles.find((profile) => profile.missing_count > 0)?.column || result.profiles[0]?.column || '')
+      const firstPopulation = result.population_comparison[0]
+      if (firstPopulation) {
+        setPopulationColumn((current) => current || firstPopulation.column)
+        const firstReference = firstPopulation.references[0]
+        if (firstReference) {
+          setPopulationReference((current) => current || firstReference.reference)
+          const firstComparison = firstReference.comparisons[0]
+          if (firstComparison) {
+            setPopulationComparison((current) => current || firstComparison.comparison)
+            setPopulationVariable((current) => current || firstComparison.variables[0]?.column || '')
+          }
+        }
+      }
+      setTimeWorkspace((current) => current.length ? current : (result.time_analysis?.numeric_columns.slice(0, 2) ?? []))
       setAnalysisStatus((current) => ({ ...current, EDA: 'ready' }))
       setLastRun((current) => ({ ...current, EDA: new Date().toLocaleString() }))
     } catch (err) {
