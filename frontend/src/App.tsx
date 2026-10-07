@@ -905,6 +905,7 @@ function App() {
     const timeMissingOption = (column: string): echarts.EChartsOption => ({
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
+      toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
       grid: { left: 58, right: 18, top: 28, bottom: 66 },
       xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
       yAxis: { type: 'value', min: 0, max: 1, name: 'Missing', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
@@ -922,6 +923,7 @@ function App() {
     const timeStatsOption = (column: string): echarts.EChartsOption => ({
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
+      toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
       legend: { top: 0, textStyle: { color: '#8b9aaf' } },
       grid: { left: 62, right: 18, top: 42, bottom: 66 },
       xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
