@@ -325,6 +325,7 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
             "semantic_type": semantic,
             "missing_count": missing,
             "missing_rate": missing / row_count,
+            "sample_missing_count": sum(_is_missing(row.get(column)) for row in sample_rows),
             "unique_count": None if column in unique_capped else len(unique_values[column]),
             "unique_count_capped": column in unique_capped,
         }
