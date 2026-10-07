@@ -1,4 +1,5 @@
-import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
+import * as echarts from 'echarts'
 
 type HealthResponse = { status: string; service: string }
 
@@ -63,6 +64,7 @@ type EdaProfile = {
     p75: number | null
     max: number
     histogram: { label: string; count: number }[]
+    cdf: { x: number; cdf: number }[]
   }
   categories?: { value: string; count: number; share: number }[]
   uniqueness_rate?: number | null
@@ -82,6 +84,9 @@ type EdaResult = {
   }
   profiles: EdaProfile[]
   relationships: { left: string; right: string; kind: string; score: number }[]
+  relationship_columns: string[]
+  relationship_columns_total: number
+  relationship_columns_limit: number
   population_comparison: {
     column: string
     groups: { value: string; sample_rows: number; share: number; missing_rate: number }[]
@@ -247,6 +252,25 @@ function MultiColumnPicker({
 }
 
 
+
+function EChart({ option, height = 360 }: { option: echarts.EChartsOption; height?: number }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!ref.current) return
+    const chart = echarts.init(ref.current)
+    chart.setOption(option)
+    const observer = new ResizeObserver(() => chart.resize())
+    observer.observe(ref.current)
+    return () => {
+      observer.disconnect()
+      chart.dispose()
+    }
+  }, [option])
+
+  return <div ref={ref} className="echart" style={{ height }} />
+}
+
 function MiniBarChart({ data }: { data: { label: string; value: number }[] }) {
   const max = Math.max(...data.map((item) => item.value), 1)
   return (
@@ -310,6 +334,11 @@ function App() {
   const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
   const [edaTimeMissingColumn, setEdaTimeMissingColumn] = useState<string>('')
   const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
+  const [qualitySort, setQualitySort] = useState<'column' | 'semantic' | 'missing' | 'unique' | 'quality'>('missing')
+  const [qualitySortDirection, setQualitySortDirection] = useState<'asc' | 'desc'>('desc')
+  const [relationshipSearch, setRelationshipSearch] = useState('')
+  const [relationshipMode, setRelationshipMode] = useState<'numeric' | 'mixed'>('numeric')
+  const [relationshipFocus, setRelationshipFocus] = useState('')
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -347,6 +376,11 @@ function App() {
     setEdaColumn('')
     setEdaTimeVariable('')
     setEdaTimeMissingColumn('')
+    setQualitySort('missing')
+    setQualitySortDirection('desc')
+    setRelationshipSearch('')
+    setRelationshipMode('numeric')
+    setRelationshipFocus('')
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
