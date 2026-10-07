@@ -870,7 +870,19 @@ function App() {
     const activeReference = activePopulation?.references.find((item) => item.reference === populationReference) ?? activePopulation?.references[0]
     const activeComparison = activeReference?.comparisons.find((item) => item.comparison === populationComparison) ?? activeReference?.comparisons[0]
     const activePopulationVariable = activeComparison?.variables.find((item) => item.column === populationVariable) ?? activeComparison?.variables[0]
-    const sortedPsiVariables = activeComparison ? [...activeComparison.variables].sort((a, b) => b.psi - a.psi) : []
+    const psiRanking = activeReference ? Array.from(new Set(activeReference.comparisons.flatMap((comparison) => comparison.variables.map((variable) => variable.column)))).map((column) => {
+      const values = Object.fromEntries(activeReference.comparisons.map((comparison) => [
+        comparison.comparison,
+        comparison.variables.find((variable) => variable.column === column)?.psi ?? 0,
+      ]))
+      const first = activeReference.comparisons.flatMap((comparison) => comparison.variables).find((variable) => variable.column === column)
+      return {
+        column,
+        semantic_type: first?.semantic_type ?? 'categorical' as SemanticType,
+        values,
+        maxPsi: Math.max(0, ...Object.values(values)),
+      }
+    }).sort((a, b) => b.maxPsi - a.maxPsi) : []
 
     const populationDistributionOption = (): echarts.EChartsOption => {
       const variable = activePopulationVariable
@@ -1094,14 +1106,16 @@ function App() {
                 {activeComparison && (
                   <div className="population-layout">
                     <div className="population-ranking">
-                      <div className="panel-title"><div><h3>PSI ranking</h3><p className="eda-muted">Highest PSI first. Click a variable to inspect its distributions.</p></div><span>{activeReference?.reference} → {activeComparison.comparison}</span></div>
+                      <div className="panel-title"><div><h3>PSI ranking</h3><p className="eda-muted">Variables are ranked by their highest PSI against any comparison group. Click a variable to inspect the currently selected comparison.</p></div><span>Reference: {activeReference?.reference}</span></div>
                       <div className="table-wrap">
-                        <table className="clickable-table">
-                          <thead><tr><th>Variable</th><th>Type</th><th>PSI</th><th>Signal</th></tr></thead>
-                          <tbody>{sortedPsiVariables.map((variable) => (
+                        <table className="clickable-table psi-table">
+                          <thead><tr><th>Variable</th><th>Type</th>{activeReference?.comparisons.map((comparison) => <th key={comparison.comparison}>PSI · {comparison.comparison}</th>)}<th>Max PSI</th><th>Signal</th></tr></thead>
+                          <tbody>{psiRanking.map((variable) => (
                             <tr key={variable.column} className={activePopulationVariable?.column === variable.column ? 'selected-row' : ''} onClick={() => setPopulationVariable(variable.column)}>
-                              <td>{variable.column}</td><td>{variable.semantic_type}</td><td>{variable.psi.toFixed(4)}</td>
-                              <td><span className={variable.psi >= .25 ? 'eda-signal bad' : variable.psi >= .1 ? 'eda-signal warn' : 'eda-signal good'}>{variable.psi >= .25 ? 'High' : variable.psi >= .1 ? 'Moderate' : 'Low'}</span></td>
+                              <td>{variable.column}</td><td>{variable.semantic_type}</td>
+                              {activeReference?.comparisons.map((comparison) => <td key={comparison.comparison}>{(variable.values[comparison.comparison] ?? 0).toFixed(4)}</td>)}
+                              <td><strong>{variable.maxPsi.toFixed(4)}</strong></td>
+                              <td><span className={variable.maxPsi >= .25 ? 'eda-signal bad' : variable.maxPsi >= .1 ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= .25 ? 'High' : variable.maxPsi >= .1 ? 'Moderate' : 'Low'}</span></td>
                             </tr>
                           ))}</tbody>
                         </table>
