@@ -22,7 +22,7 @@ type DatasetPreview = {
 }
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
-type Section = 'Overview' | 'Data' | 'Validation' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports'
+type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports'
 type AnalysisSection = Exclude<Section, 'Overview' | 'Data'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
@@ -43,8 +43,73 @@ type ValidationConfig = {
   semanticTypes: Record<string, SemanticType>
 }
 
-const navItems: Section[] = ['Overview', 'Data', 'Validation', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
-const analysisSections: AnalysisSection[] = ['Validation', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
+type EdaTab = 'Overview' | 'Data quality' | 'Distributions' | 'Relationships' | 'Population comparison' | 'Time analysis' | 'Missingness'
+type TimeGranularity = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
+
+type EdaProfile = {
+  column: string
+  semantic_type: SemanticType
+  missing_count: number
+  missing_rate: number
+  unique_count: number | null
+  unique_count_capped: boolean
+  numeric_summary?: {
+    count: number
+    mean: number
+    std: number
+    min: number
+    p25: number | null
+    median: number | null
+    p75: number | null
+    max: number
+    histogram: { label: string; count: number }[]
+  }
+  categories?: { value: string; count: number; share: number }[]
+  uniqueness_rate?: number | null
+  text_summary?: { mean_length: number; median_length: number; max_length: number }
+}
+
+type EdaResult = {
+  sample_size: number
+  sample_limit: number
+  overview: {
+    rows: number
+    columns: number
+    missing_cells: number
+    missing_rate: number
+    duplicate_rows: number
+    duplicate_rate: number
+  }
+  profiles: EdaProfile[]
+  relationships: { left: string; right: string; kind: string; score: number }[]
+  population_comparison: {
+    column: string
+    groups: { value: string; sample_rows: number; share: number; missing_rate: number }[]
+  }[]
+  time_analysis: null | {
+    time_column: string
+    granularity: string
+    buckets: {
+      bucket: string
+      observations: number
+      missing_rate: number
+      variables: Record<string, { mean: number; median: number; p25: number | null; p75: number | null; missing_rate: number }>
+    }[]
+  }
+  missingness_diagnostics: {
+    column: string
+    missing_count: number
+    missing_rate: number
+    assessment: string
+    explanation: string
+    strongest_associations: { column: string; score: number; evidence: string }[]
+    mnar_note: string
+  }[]
+}
+
+
+const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
+const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 
 const metrics = [
   { label: 'AUC', value: '0.784', delta: '+0.012', tone: 'positive' },
@@ -57,6 +122,7 @@ const metrics = [
 
 const analysisCopy: Record<AnalysisSection, { title: string; description: string; action: string }> = {
   Validation: { title: 'Validation setup', description: 'Define the model output, target and optional analysis roles for the uploaded dataset.', action: 'Run validation' },
+  EDA: { title: 'Exploratory Data Analysis', description: 'Profile data quality, distributions, relationships, population differences and time behaviour.', action: 'Run EDA' },
   Discrimination: { title: 'Discrimination', description: 'Evaluate ranking performance of the submitted model.', action: 'Run discrimination' },
   Calibration: { title: 'Calibration', description: 'Evaluate how predicted probabilities align with observed default rates.', action: 'Run calibration' },
   Stability: { title: 'Stability', description: 'Assess population and model stability over time or across samples.', action: 'Run stability analysis' },
@@ -80,6 +146,7 @@ const initialConfig: ValidationConfig = {
 
 const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
   Validation: 'not-run',
+  EDA: 'blocked',
   Discrimination: 'blocked',
   Calibration: 'blocked',
   Stability: 'blocked',
@@ -87,6 +154,9 @@ const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
   Findings: 'blocked',
   Reports: 'blocked',
 })
+
+const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`
+const formatMetric = (value: number | null | undefined) => value === null || value === undefined ? '—' : Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : value.toLocaleString(undefined, { maximumFractionDigits: 3 })
 
 const formatFileSize = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
@@ -175,6 +245,52 @@ function MultiColumnPicker({
   )
 }
 
+
+function MiniBarChart({ data }: { data: { label: string; value: number }[] }) {
+  const max = Math.max(...data.map((item) => item.value), 1)
+  return (
+    <div className="eda-bar-chart">
+      {data.map((item) => (
+        <div className="eda-bar-row" key={item.label}>
+          <span title={item.label}>{item.label}</span>
+          <div><i style={{ width: `${(item.value / max) * 100}%` }} /></div>
+          <strong>{item.value.toLocaleString()}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MiniLineChart({ data, valueSuffix = '' }: { data: { label: string; value: number }[]; valueSuffix?: string }) {
+  if (!data.length) return <div className="eda-no-data">No data available.</div>
+  const width = 760
+  const height = 220
+  const pad = 28
+  const values = data.map((item) => item.value)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min || 1
+  const points = data.map((item, index) => {
+    const x = pad + (index * (width - pad * 2)) / Math.max(data.length - 1, 1)
+    const y = height - pad - ((item.value - min) / range) * (height - pad * 2)
+    return `${x},${y}`
+  }).join(' ')
+
+  return (
+    <div className="eda-line-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="eda-line-chart" role="img">
+        <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} className="axis" />
+        <polyline points={points} className="main-line" />
+        {data.map((item, index) => {
+          const [x, y] = points.split(' ')[index].split(',')
+          return <circle key={item.label} cx={x} cy={y} r="3" className="eda-point"><title>{item.label}: {item.value.toFixed(2)}{valueSuffix}</title></circle>
+        })}
+      </svg>
+      <div className="eda-line-labels"><span>{data[0]?.label}</span><span>{data[data.length - 1]?.label}</span></div>
+    </div>
+  )
+}
+
 function App() {
   const [activeSection, setActiveSection] = useState<Section>('Overview')
   const [health, setHealth] = useState<HealthResponse | null>(null)
@@ -186,6 +302,12 @@ function App() {
   const [validationConfig, setValidationConfig] = useState<ValidationConfig>(initialConfig)
   const [analysisStatus, setAnalysisStatus] = useState<Record<AnalysisSection, AnalysisStatus>>(initialStatuses)
   const [lastRun, setLastRun] = useState<Partial<Record<AnalysisSection, string>>>({})
+  const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
+  const [edaError, setEdaError] = useState<string | null>(null)
+  const [edaTab, setEdaTab] = useState<EdaTab>('Overview')
+  const [edaColumn, setEdaColumn] = useState<string>('')
+  const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
+  const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -217,6 +339,11 @@ function App() {
     setValidationConfig(initialConfig)
     setAnalysisStatus(initialStatuses())
     setLastRun({})
+    setEdaResult(null)
+    setEdaError(null)
+    setEdaTab('Overview')
+    setEdaColumn('')
+    setEdaTimeVariable('')
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -296,6 +423,34 @@ function App() {
       })
       setLastRun((current) => ({ ...current, [section]: new Date().toLocaleString() }))
     }, 650)
+  }
+
+
+  const runEda = async () => {
+    if (!selectedFile || !validationReady) return
+
+    setAnalysisStatus((current) => ({ ...current, EDA: 'running' }))
+    setEdaError(null)
+
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+    formData.append('config', JSON.stringify(validationConfig))
+    formData.append('time_granularity', timeGranularity)
+
+    try {
+      const response = await fetch('http://localhost:8000/eda/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as EdaResult
+      setEdaResult(result)
+      setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
+      setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
+      setAnalysisStatus((current) => ({ ...current, EDA: 'ready' }))
+      setLastRun((current) => ({ ...current, EDA: new Date().toLocaleString() }))
+    } catch (err) {
+      setEdaError(err instanceof Error ? err.message : 'EDA failed.')
+      setAnalysisStatus((current) => ({ ...current, EDA: 'failed' }))
+    }
   }
 
   const renderDataPage = () => (
@@ -463,7 +618,208 @@ function App() {
     )
   }
 
-  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation'>) => {
+
+  const renderEda = () => {
+    if (!preview) return <EmptyAnalysisState section="EDA" onOpenData={() => setActiveSection('Data')} />
+
+    if (!validationReady) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic data profiling based on the semantic column types configured in Validation.</p></div>
+            <div className="analysis-status-pill blocked"><span />Blocked</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>Complete validation first</h2>
+            <p>Confirm the dataset mapping and semantic column types before running EDA.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    const status = analysisStatus.EDA
+    const activeProfile = edaResult?.profiles.find((profile) => profile.column === edaColumn)
+    const tabs: EdaTab[] = ['Overview', 'Data quality', 'Distributions', 'Relationships', 'Population comparison', 'Time analysis', 'Missingness']
+    const populationEnabled = validationConfig.populationColumns.length > 0
+    const timeEnabled = Boolean(validationConfig.timeColumn)
+
+    const renderLocked = (kind: 'population' | 'time') => (
+      <section className="panel eda-locked-card">
+        <div className="analysis-run-icon" aria-hidden="true"><span>🔒</span></div>
+        <h2>{kind === 'population' ? 'Population comparison needs configuration' : 'Time analysis needs configuration'}</h2>
+        <p>{kind === 'population'
+          ? 'Select at least one Sample / population column in Validation to compare groups.'
+          : 'Select a Time column in Validation to analyse volume, missingness and variables over time.'}</p>
+        <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+      </section>
+    )
+
+    return (
+      <section className="page-content eda-page">
+        <div className="analysis-page-header">
+          <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic profiling only — no credit-risk-specific interpretation is applied here.</p></div>
+          <div className="eda-header-actions">
+            <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+            <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : edaResult ? 'Run EDA again' : 'Run EDA'}</button>
+          </div>
+        </div>
+
+        {edaError && <div className="message error-message">{edaError}</div>}
+
+        {!edaResult ? (
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>{status === 'running' ? 'EDA is running…' : 'Ready to profile the dataset'}</h2>
+            <p>RiskLab will calculate data quality, distributions, relationships and missingness diagnostics. Optional population and time views use the fields configured in Validation.</p>
+            <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
+          </section>
+        ) : (
+          <>
+            <div className="eda-tabs">
+              {tabs.map((tab) => {
+                const locked = (tab === 'Population comparison' && !populationEnabled) || (tab === 'Time analysis' && !timeEnabled)
+                return <button key={tab} className={edaTab === tab ? 'active' : ''} onClick={() => setEdaTab(tab)}>{tab}{locked ? '  🔒' : ''}</button>
+              })}
+            </div>
+            <div className="eda-sample-note">Rows and exact missingness are calculated on the full dataset. Distribution, relationship, population and time diagnostics use a reservoir sample of up to {edaResult.sample_limit.toLocaleString()} rows ({edaResult.sample_size.toLocaleString()} used).</div>
+
+            {edaTab === 'Overview' && (
+              <>
+                <div className="eda-kpi-grid">
+                  <article className="metric-card"><span>Rows</span><strong>{edaResult.overview.rows.toLocaleString()}</strong><small className="neutral">Full dataset</small></article>
+                  <article className="metric-card"><span>Columns</span><strong>{edaResult.overview.columns}</strong><small className="neutral">Configured schema</small></article>
+                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > .05 ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
+                  <article className="metric-card"><span>Duplicate rows</span><strong>{edaResult.overview.duplicate_rows.toLocaleString()}</strong><small className={edaResult.overview.duplicate_rows ? 'negative' : 'positive'}>{formatPercent(edaResult.overview.duplicate_rate)}</small></article>
+                </div>
+                <section className="panel eda-section">
+                  <div className="panel-title"><h2>Columns by semantic type</h2></div>
+                  <MiniBarChart data={Object.entries(edaResult.profiles.reduce<Record<string, number>>((acc, profile) => {
+                    acc[profile.semantic_type] = (acc[profile.semantic_type] || 0) + 1
+                    return acc
+                  }, {})).map(([label, value]) => ({ label, value }))} />
+                </section>
+              </>
+            )}
+
+            {edaTab === 'Data quality' && (
+              <section className="panel eda-section">
+                <div className="panel-title"><h2>Column quality</h2><span>{edaResult.profiles.length} columns</span></div>
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>Column</th><th>Semantic type</th><th>Missing</th><th>Unique</th><th>Quality signal</th></tr></thead>
+                    <tbody>{edaResult.profiles.map((profile) => (
+                      <tr key={profile.column}>
+                        <td>{profile.column}</td><td>{profile.semantic_type}</td><td>{formatPercent(profile.missing_rate)}</td>
+                        <td>{profile.unique_count_capped ? '>10,000' : (profile.unique_count ?? '—')}</td>
+                        <td><span className={profile.missing_rate > .2 ? 'eda-signal bad' : profile.missing_rate > .05 ? 'eda-signal warn' : 'eda-signal good'}>{profile.missing_rate > .2 ? 'Review' : profile.missing_rate > .05 ? 'Watch' : 'OK'}</span></td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {edaTab === 'Distributions' && (
+              <section className="panel eda-section">
+                <div className="eda-control-row">
+                  <div><h2>Column explorer</h2><p>Summary adapts to the semantic type selected in Validation.</p></div>
+                  <label className="form-field compact-field"><span>Column</span><select value={edaColumn} onChange={(e) => setEdaColumn(e.target.value)}>{edaResult.profiles.filter((profile) => profile.semantic_type !== 'ignore').map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
+                </div>
+                {activeProfile && (
+                  <div className="eda-column-explorer">
+                    <div className="eda-inline-stats">
+                      <div><span>Type</span><strong>{activeProfile.semantic_type}</strong></div>
+                      <div><span>Missing</span><strong>{formatPercent(activeProfile.missing_rate)}</strong></div>
+                      <div><span>Unique</span><strong>{activeProfile.unique_count_capped ? '>10k' : (activeProfile.unique_count ?? '—')}</strong></div>
+                    </div>
+                    {activeProfile.numeric_summary && (
+                      <>
+                        <div className="eda-inline-stats wide">
+                          <div><span>Mean</span><strong>{formatMetric(activeProfile.numeric_summary.mean)}</strong></div>
+                          <div><span>Median</span><strong>{formatMetric(activeProfile.numeric_summary.median)}</strong></div>
+                          <div><span>Std</span><strong>{formatMetric(activeProfile.numeric_summary.std)}</strong></div>
+                          <div><span>P25</span><strong>{formatMetric(activeProfile.numeric_summary.p25)}</strong></div>
+                          <div><span>P75</span><strong>{formatMetric(activeProfile.numeric_summary.p75)}</strong></div>
+                          <div><span>Min / max</span><strong>{formatMetric(activeProfile.numeric_summary.min)} / {formatMetric(activeProfile.numeric_summary.max)}</strong></div>
+                        </div>
+                        <MiniBarChart data={activeProfile.numeric_summary.histogram.map((item) => ({ label: item.label, value: item.count }))} />
+                      </>
+                    )}
+                    {activeProfile.categories && <MiniBarChart data={activeProfile.categories.map((item) => ({ label: item.value, value: item.count }))} />}
+                    {activeProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{activeProfile.uniqueness_rate === null || activeProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(activeProfile.uniqueness_rate)}</strong></div>}
+                    {activeProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(activeProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(activeProfile.text_summary.median_length)}</strong>, max <strong>{activeProfile.text_summary.max_length}</strong>.</div>}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {edaTab === 'Relationships' && (
+              <section className="panel eda-section">
+                <div className="panel-title"><div><h2>Strongest pairwise relationships</h2><p className="eda-muted">Metric depends on semantic types: Pearson correlation, Cramér's V or normalized group-mean spread.</p></div></div>
+                {edaResult.relationships.length ? <div className="table-wrap"><table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.slice(0, 25).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table></div> : <div className="eda-no-data">No eligible pairwise relationships were available.</div>}
+              </section>
+            )}
+
+            {edaTab === 'Population comparison' && (!populationEnabled ? renderLocked('population') : (
+              <section className="panel eda-section">
+                <div className="panel-title"><div><h2>Population comparison</h2><p className="eda-muted">Group size and overall missingness for configured population columns.</p></div></div>
+                {edaResult.population_comparison.map((population) => (
+                  <div className="eda-population-block" key={population.column}>
+                    <h3>{population.column}</h3>
+                    <div className="table-wrap"><table><thead><tr><th>Group</th><th>Sample rows</th><th>Share</th><th>Missing cells</th></tr></thead><tbody>{population.groups.map((group) => <tr key={group.value}><td>{group.value}</td><td>{group.sample_rows.toLocaleString()}</td><td>{formatPercent(group.share)}</td><td>{formatPercent(group.missing_rate)}</td></tr>)}</tbody></table></div>
+                  </div>
+                ))}
+              </section>
+            ))}
+
+            {edaTab === 'Time analysis' && (!timeEnabled ? renderLocked('time') : (
+              <section className="panel eda-section">
+                <div className="eda-control-row">
+                  <div><h2>Time analysis</h2><p>Volume, missingness and variable behaviour over the configured time column.</p></div>
+                  <label className="form-field compact-field"><span>Aggregation</span><select value={timeGranularity} onChange={(e) => setTimeGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Change aggregation and run EDA again.</small></label>
+                </div>
+                {edaResult.time_analysis?.buckets.length ? (
+                  <>
+                    <div className="eda-chart-grid">
+                      <article className="eda-chart-panel"><h3>Observation volume</h3><MiniLineChart data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.observations }))} /></article>
+                      <article className="eda-chart-panel"><h3>Missing cells over time</h3><MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.missing_rate * 100 }))} /></article>
+                    </div>
+                    <div className="eda-control-row variable-time-control">
+                      <div><h3>Variable behaviour over time</h3><p className="eda-muted">Median trend for continuous / ordinal variables.</p></div>
+                      <label className="form-field compact-field"><span>Variable</span><select value={edaTimeVariable} onChange={(e) => setEdaTimeVariable(e.target.value)}>{edaResult.profiles.filter((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type)).map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
+                    </div>
+                    {edaTimeVariable && <MiniLineChart data={edaResult.time_analysis.buckets.filter((bucket) => bucket.variables[edaTimeVariable]).map((bucket) => ({ label: bucket.bucket, value: bucket.variables[edaTimeVariable].median }))} />}
+                  </>
+                ) : <div className="eda-no-data">No parseable time values were found for {validationConfig.timeColumn}.</div>}
+              </section>
+            ))}
+
+            {edaTab === 'Missingness' && (
+              <section className="panel eda-section">
+                <div className="panel-title"><div><h2>Missingness mechanism diagnostics</h2><p className="eda-muted">RiskLab provides evidence, not a definitive MCAR / MAR / MNAR classification. MNAR cannot be established from observed data alone.</p></div></div>
+                {edaResult.missingness_diagnostics.length ? (
+                  <div className="missingness-grid">{edaResult.missingness_diagnostics.map((item) => (
+                    <article className="missingness-card" key={item.column}>
+                      <div className="missingness-card-head"><div><h3>{item.column}</h3><span>{formatPercent(item.missing_rate)} missing · {item.missing_count.toLocaleString()} rows</span></div><span className={item.assessment === 'MAR plausible' ? 'missingness-assessment warn' : item.assessment.startsWith('MCAR') ? 'missingness-assessment good' : 'missingness-assessment neutral'}>{item.assessment}</span></div>
+                      <p>{item.explanation}</p>
+                      {item.strongest_associations.length > 0 && <div className="association-list"><strong>Strongest observed associations</strong>{item.strongest_associations.map((association) => <span key={association.column}>{association.column}: {association.evidence}</span>)}</div>}
+                      <div className="mnar-note">{item.mnar_note}</div>
+                    </article>
+                  ))}</div>
+                ) : <div className="eda-no-data">No missing values were detected.</div>}
+              </section>
+            )}
+
+            <div className="eda-footer-meta">Last run: {lastRun.EDA ?? '—'}</div>
+          </>
+        )}
+      </section>
+    )
+  }
+
+  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA'>) => {
     if (!preview) return <EmptyAnalysisState section={section} onOpenData={() => setActiveSection('Data')} />
 
     const status = analysisStatus[section]
@@ -535,7 +891,8 @@ function App() {
         {activeSection === 'Overview' && renderOverview()}
         {activeSection === 'Data' && renderDataPage()}
         {activeSection === 'Validation' && renderValidation()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && renderAnalysisPage(activeSection)}
+        {activeSection === 'EDA' && renderEda()}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
