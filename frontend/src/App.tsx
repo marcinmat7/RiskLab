@@ -278,6 +278,60 @@ type CalibrationResult = {
   }
 }
 
+type StabilityVariable = {
+  column: string
+  semantic_type: SemanticType
+  psi: number
+  reference_mean: number | null
+  comparison_mean: number | null
+  reference_missing_rate: number
+  comparison_missing_rate: number
+  missing_delta: number
+  distribution: {
+    label: string
+    reference_share: number
+    comparison_share: number
+  }[]
+}
+
+type StabilityResult = {
+  sources: {
+    key: string
+    name: string
+    groups: { value: string; observations: number }[]
+  }[]
+  comparisons: {
+    source_key: string
+    source_name: string
+    reference: string
+    comparison: string
+    reference_observations: number
+    comparison_observations: number
+    variables: StabilityVariable[]
+  }[]
+  variables: {
+    column: string
+    semantic_type: SemanticType
+  }[]
+  time_analysis: null | {
+    time_column: string
+    granularities: Record<TimeGranularity, {
+      bucket: string
+      observations: number
+      references: {
+        source_key: string
+        reference: string
+        variables: { column: string; psi: number }[]
+      }[]
+    }[]>
+  }
+  thresholds: {
+    moderate: number
+    high: number
+    note: string
+  }
+}
+
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 
@@ -546,6 +600,13 @@ function App() {
   const [calibrationSegmentKey, setCalibrationSegmentKey] = useState('')
   const [calibrationGranularity, setCalibrationGranularity] = useState<TimeGranularity>('monthly')
   const [calibrationTimeSegmentKey, setCalibrationTimeSegmentKey] = useState('overall')
+  const [stabilityResult, setStabilityResult] = useState<StabilityResult | null>(null)
+  const [stabilityError, setStabilityError] = useState<string | null>(null)
+  const [stabilitySourceKey, setStabilitySourceKey] = useState('')
+  const [stabilityReference, setStabilityReference] = useState('')
+  const [stabilityComparison, setStabilityComparison] = useState('')
+  const [stabilityVariable, setStabilityVariable] = useState('')
+  const [stabilityGranularity, setStabilityGranularity] = useState<TimeGranularity>('monthly')
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
 
   useEffect(() => {
@@ -604,6 +665,13 @@ function App() {
     setCalibrationSegmentKey('')
     setCalibrationGranularity('monthly')
     setCalibrationTimeSegmentKey('overall')
+    setStabilityResult(null)
+    setStabilityError(null)
+    setStabilitySourceKey('')
+    setStabilityReference('')
+    setStabilityComparison('')
+    setStabilityVariable('')
+    setStabilityGranularity('monthly')
     setValidationConfigMessage(null)
   }
 
@@ -618,6 +686,12 @@ function App() {
     setCalibrationError(null)
     setCalibrationSegmentKey('')
     setCalibrationTimeSegmentKey('overall')
+    setStabilityResult(null)
+    setStabilityError(null)
+    setStabilitySourceKey('')
+    setStabilityReference('')
+    setStabilityComparison('')
+    setStabilityVariable('')
     setEdaTab('Overview')
     setEdaColumn('')
     setPopulationColumn('')
