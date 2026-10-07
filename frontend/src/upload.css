@@ -327,3 +327,24 @@
 @media (max-width: 600px) {
   .time-variable-list { grid-template-columns: 1fr; }
 }
+
+
+.discrimination-page .analysis-page-header { margin-bottom: 14px; }
+.discrimination-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.discrimination-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.discrimination-chart { margin-top: 14px; padding: 18px; }
+.discrimination-chart-grid .discrimination-chart { margin-top: 0; }
+.discrimination-section { margin-top: 14px; padding: 18px; }
+.discrimination-section .table-wrap { margin-top: 12px; }
+
+@media (max-width: 1180px) {
+  .discrimination-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .discrimination-chart-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .discrimination-kpis { grid-template-columns: 1fr 1fr; }
+}
