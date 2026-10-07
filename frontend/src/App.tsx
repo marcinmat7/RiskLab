@@ -888,6 +888,31 @@ function App() {
     }
   }
 
+  const runCalibration = async () => {
+    if (!selectedFile || !validationReady || validationConfig.predictionType !== 'pd') return
+    setAnalysisStatus((current) => ({ ...current, Calibration: 'running' }))
+    setCalibrationError(null)
+
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+    formData.append('config', JSON.stringify(validationConfig))
+
+    try {
+      const response = await fetch('http://localhost:8000/calibration/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as CalibrationResult
+      setCalibrationResult(result)
+      setCalibrationSegmentKey((current) => current || result.segment_performance[0]?.key || '')
+      setCalibrationTimeSegmentKey('overall')
+      setAnalysisStatus((current) => ({ ...current, Calibration: 'ready' }))
+      setLastRun((current) => ({ ...current, Calibration: new Date().toLocaleString() }))
+    } catch (err) {
+      setCalibrationError(err instanceof Error ? err.message : 'Calibration analysis failed.')
+      setAnalysisStatus((current) => ({ ...current, Calibration: 'failed' }))
+    }
+  }
+
   const renderDataPage = () => (
     <section className="page-content">
       <div className="page-heading compact-heading">
