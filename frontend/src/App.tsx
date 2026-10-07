@@ -1833,7 +1833,255 @@ function App() {
     )
   }
 
-  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA' | 'Discrimination'>) => {
+  const renderCalibration = () => {
+    if (!preview) return <EmptyAnalysisState section="Calibration" onOpenData={() => setActiveSection('Data')} />
+
+    const status = analysisStatus.Calibration
+    if (!validationReady) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Calibration</p><h1>Calibration</h1><p>Evaluate whether predicted probabilities align with observed default rates.</p></div>
+            <div className="analysis-status-pill blocked"><span />Blocked</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>Complete validation first</h2>
+            <p>Calibration requires a validated prediction and target mapping.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (validationConfig.predictionType !== 'pd') {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Calibration</p><h1>Calibration</h1><p>Evaluate whether predicted probabilities align with observed default rates.</p></div>
+            <div className="analysis-status-pill unavailable"><span />Not available</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>Calibration requires probabilities</h2>
+            <p>The model output is configured as a score. Change Output type to Probability of Default (PD) to run calibration analysis.</p>
+          </section>
+        </section>
+      )
+    }
+
+    if (!calibrationResult) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Calibration</p><h1>Calibration</h1><p>Spiegelhalter test, observed vs predicted default rates and calibration over time.</p></div>
+            <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+          </div>
+          {calibrationError && <div className="message error-message">{calibrationError}</div>}
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>{status === 'running' ? 'Calibration analysis is running…' : 'Ready to evaluate calibration'}</h2>
+            <p>The analysis uses observation-level PDs and the configured default indicator. Subgroup definitions are shared with Discrimination.</p>
+            <button className="primary-button" disabled={status === 'running'} onClick={runCalibration}>{status === 'running' ? 'Running…' : 'Run calibration'}</button>
+          </section>
+        </section>
+      )
+    }
+
+    const result = calibrationResult
+    const selectedSegment = result.segment_performance.find((segment) => segment.key === calibrationSegmentKey) ?? result.segment_performance[0]
+    const summaryRows = [
+      { value: 'All', ...result.overall },
+      ...(selectedSegment?.groups ?? []),
+    ]
+
+    const spiegelhalterBadge = (pValue: number | null) => {
+      if (pValue === null) return <span className="calibration-test-badge neutral">Unavailable</span>
+      if (pValue < 0.01) return <span className="calibration-test-badge bad">{pValue.toFixed(4)} · Strong evidence</span>
+      if (pValue < 0.05) return <span className="calibration-test-badge warn">{pValue.toFixed(4)} · Evidence</span>
+      return <span className="calibration-test-badge neutral">{pValue.toFixed(4)} · No significant evidence</span>
+    }
+
+    const calibrationBins = result.overall.calibration_bins
+    const maxCalibrationValue = Math.max(
+      0.05,
+      ...calibrationBins.flatMap((row) => [row.mean_pd, row.observed_default_rate, row.ci_upper ?? 0]),
+    )
+    const calibrationAxisMax = Math.min(1, Math.ceil(maxCalibrationValue * 20) / 20)
+
+    const calibrationOption: echarts.EChartsOption = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 64, right: 24, top: 48, bottom: 56 },
+      xAxis: {
+        type: 'value',
+        min: 0,
+        max: calibrationAxisMax,
+        name: 'Mean predicted PD',
+        axisLabel: { color: '#71809a', formatter: (value: string | number) => (Number(value) * 100).toFixed(0) + '%' },
+        splitLine: { lineStyle: { color: '#1b293d' } },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: calibrationAxisMax,
+        name: 'Observed default rate',
+        axisLabel: { color: '#71809a', formatter: (value: string | number) => (Number(value) * 100).toFixed(0) + '%' },
+        splitLine: { lineStyle: { color: '#1b293d' } },
+      },
+      series: [
+        {
+          name: 'Observed',
+          type: 'line',
+          showSymbol: true,
+          symbolSize: 8,
+          data: calibrationBins.map((row) => [row.mean_pd, row.observed_default_rate]),
+          lineStyle: { width: 2, color: '#4f8cff' },
+        },
+        {
+          name: 'Ideal calibration',
+          type: 'line',
+          showSymbol: false,
+          data: [[0,0],[calibrationAxisMax, calibrationAxisMax]],
+          lineStyle: { width: 1, type: 'dashed', color: '#65758d' },
+        },
+      ],
+    }
+
+    const timeData = result.time_performance?.granularities[calibrationGranularity]
+    const selectedTimeSegment = calibrationTimeSegmentKey === 'overall'
+      ? null
+      : timeData?.segments.find((segment) => segment.key === calibrationTimeSegmentKey)
+    const timeCategories = timeData?.overall.map((bucket) => bucket.bucket) ?? []
+    const cutoffBucket = timeBucketForDate(validationConfig.timeCutoffDate, calibrationGranularity)
+    const cutoffMarkLine = validationConfig.timeCutoffDate && cutoffBucket ? {
+      silent: true,
+      symbol: 'none',
+      label: { formatter: `Cut-off · ${validationConfig.timeCutoffDate}`, color: '#9aa9bd', position: 'insideEndTop' as const },
+      lineStyle: { type: 'dashed' as const, width: 1, color: '#9aa9bd' },
+      data: [{ xAxis: cutoffBucket }],
+    } : undefined
+
+    const calibrationTimeOption: echarts.EChartsOption | null = timeData ? {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { type: 'scroll', top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 62, right: 20, top: 54, bottom: 64 },
+      xAxis: { type: 'category', data: timeCategories, boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, name: 'Rate', axisLabel: { color: '#71809a', formatter: (value: string | number) => (Number(value) * 100).toFixed(1) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 12, height: 18 }],
+      series: calibrationTimeSegmentKey === 'overall'
+        ? [
+            {
+              name: 'Mean PD',
+              type: 'line',
+              showSymbol: true,
+              data: timeData.overall.map((bucket) => bucket.mean_pd),
+              lineStyle: { width: 2, color: '#4f8cff' },
+              markLine: cutoffMarkLine,
+            },
+            {
+              name: 'Observed default rate',
+              type: 'line',
+              showSymbol: true,
+              data: timeData.overall.map((bucket) => bucket.default_rate),
+              lineStyle: { width: 2, color: '#69e7ad' },
+            },
+          ]
+        : (selectedTimeSegment?.groups.flatMap((group, groupIndex) => {
+            const lookup = new Map(group.buckets.map((bucket) => [bucket.bucket, bucket]))
+            return [
+              {
+                name: `${group.value} · Mean PD`,
+                type: 'line' as const,
+                showSymbol: false,
+                data: timeCategories.map((bucket) => lookup.get(bucket)?.mean_pd ?? null),
+                lineStyle: { width: 1, type: 'dashed' as const },
+                markLine: groupIndex === 0 ? cutoffMarkLine : undefined,
+              },
+              {
+                name: `${group.value} · Observed`,
+                type: 'line' as const,
+                showSymbol: true,
+                data: timeCategories.map((bucket) => lookup.get(bucket)?.default_rate ?? null),
+                lineStyle: { width: 2 },
+              },
+            ]
+          }) ?? []),
+    } : null
+
+    return (
+      <section className="page-content calibration-page">
+        <div className="analysis-page-header">
+          <div><p className="eyebrow">Calibration</p><h1>Calibration</h1><p>Compare predicted PD with observed defaults overall, across segments and over time.</p></div>
+          <div className="eda-header-actions"><div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div><button className="primary-button" disabled={status === 'running'} onClick={runCalibration}>{status === 'running' ? 'Running…' : 'Run again'}</button></div>
+        </div>
+        {calibrationError && <div className="message error-message">{calibrationError}</div>}
+
+        <section className="panel calibration-summary-section">
+          <div className="eda-control-row">
+            <div>
+              <h2>Calibration summary</h2>
+              <p>Spiegelhalter tests the null hypothesis that the submitted probabilities are calibrated to the observed binary outcomes.</p>
+            </div>
+            {result.segment_performance.length > 0 && (
+              <label className="form-field compact-field"><span>Segment view</span><select value={selectedSegment?.key ?? ''} onChange={(e) => setCalibrationSegmentKey(e.target.value)}>{result.segment_performance.map((segment) => <option key={segment.key} value={segment.key}>{segment.name}</option>)}</select></label>
+            )}
+          </div>
+          <div className="table-wrap">
+            <table className="calibration-summary-table">
+              <thead><tr><th>Segment</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean PD</th><th>Spiegelhalter p-value</th></tr></thead>
+              <tbody>{summaryRows.map((row) => (
+                <tr key={row.value}>
+                  <td><strong>{row.value}</strong></td>
+                  <td>{row.observations.toLocaleString()}</td>
+                  <td>{row.defaults.toLocaleString()}</td>
+                  <td>{formatPercent(row.default_rate)}</td>
+                  <td>{formatPercent(row.mean_pd)}</td>
+                  <td>{spiegelhalterBadge(row.spiegelhalter_p_value)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ 5% · no significant evidence of miscalibration</span><span><i className="warn" />1% ≤ p &lt; 5% · evidence of miscalibration</span><span><i className="bad" />p &lt; 1% · strong evidence of miscalibration</span></div>
+        </section>
+
+        <div className="calibration-kpis">
+          <article className="metric-card"><span>Brier score</span><strong>{formatMetric(result.overall.brier_score)}</strong><small className="neutral">Mean squared probability error</small></article>
+          <article className="metric-card"><span>O / E ratio</span><strong>{formatMetric(result.overall.oe_ratio)}</strong><small className="neutral">Observed / expected defaults</small></article>
+          <article className="metric-card"><span>Expected defaults</span><strong>{formatMetric(result.overall.expected_defaults)}</strong><small className="neutral">Σ predicted PD</small></article>
+          <article className="metric-card"><span>Spiegelhalter Z</span><strong>{formatMetric(result.overall.spiegelhalter_z)}</strong><small className="neutral">Two-sided calibration test</small></article>
+        </div>
+
+        <section className="panel calibration-chart-section">
+          <div className="panel-title"><div><h2>Calibration curve</h2><p className="eda-muted">Ten equal-frequency PD bins. The dashed diagonal represents ideal calibration.</p></div></div>
+          <EChart option={calibrationOption} height={440} />
+          <div className="calibration-bin-strip">{calibrationBins.map((row) => <span key={row.bin}><strong>Bin {row.bin}</strong><small>PD {formatPercent(row.mean_pd)} · DR {formatPercent(row.observed_default_rate)} · n={row.observations.toLocaleString()}</small></span>)}</div>
+        </section>
+
+        {result.time_performance && timeData && (
+          <section className="panel calibration-chart-section">
+            <div className="eda-control-row">
+              <div><h2>Calibration over time</h2><p>Compare mean predicted PD with observed default rate. Aggregation and subgroup selection update without rerunning the analysis.</p></div>
+              <div className="discrimination-time-controls">
+                <label className="form-field compact-field"><span>Aggregation</span><select value={calibrationGranularity} onChange={(e) => setCalibrationGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>No rerun required.</small></label>
+                <label className="form-field compact-field"><span>Population</span><select value={calibrationTimeSegmentKey} onChange={(e) => setCalibrationTimeSegmentKey(e.target.value)}><option value="overall">Overall</option>{timeData.segments.map((segment) => <option key={segment.key} value={segment.key}>{segment.name}</option>)}</select></label>
+              </div>
+            </div>
+            {calibrationTimeOption && <EChart option={calibrationTimeOption} height={460} />}
+          </section>
+        )}
+
+        {(result.excluded.missing_prediction > 0 || result.excluded.missing_target > 0 || result.excluded.invalid_pd > 0) && (
+          <div className="eda-sample-note">Excluded rows: {result.excluded.missing_prediction.toLocaleString()} missing prediction, {result.excluded.missing_target.toLocaleString()} missing target, {result.excluded.invalid_pd.toLocaleString()} PD outside [0, 1].</div>
+        )}
+        <div className="eda-footer-meta">Last run: {lastRun.Calibration ?? '—'}</div>
+      </section>
+    )
+  }
+
+  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA' | 'Discrimination' | 'Calibration'>) => {
     if (!preview) return <EmptyAnalysisState section={section} onOpenData={() => setActiveSection('Data')} />
 
     const status = analysisStatus[section]
@@ -1907,7 +2155,8 @@ function App() {
         {activeSection === 'Validation' && renderValidation()}
         {activeSection === 'EDA' && renderEda()}
         {activeSection === 'Discrimination' && renderDiscrimination()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && renderAnalysisPage(activeSection)}
+        {activeSection === 'Calibration' && renderCalibration()}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
