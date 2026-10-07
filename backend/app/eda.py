@@ -13,8 +13,8 @@ from fastapi import File, Form, HTTPException, UploadFile
 
 EDA_SAMPLE_ROWS = 20_000
 MAX_TRACKED_UNIQUES = 10_000
-TOP_CATEGORIES = 10
-MAX_RELATIONSHIP_COLUMNS = 30
+TOP_CATEGORIES = 50
+MAX_RELATIONSHIP_COLUMNS = 80
 
 
 def _is_missing(value: str | None) -> bool:
@@ -86,6 +86,25 @@ def _histogram(values: list[float], bins: int = 12) -> list[dict[str, Any]]:
     ]
 
 
+def _empirical_cdf(values: list[float], points: int = 100) -> list[dict[str, float]]:
+    if not values:
+        return []
+    ordered = sorted(values)
+    if len(ordered) <= points:
+        return [
+            {"x": value, "cdf": (index + 1) / len(ordered)}
+            for index, value in enumerate(ordered)
+        ]
+    result: list[dict[str, float]] = []
+    for index in range(points):
+        position = round(index * (len(ordered) - 1) / (points - 1))
+        result.append({
+            "x": ordered[position],
+            "cdf": (position + 1) / len(ordered),
+        })
+    return result
+
+
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
     if len(xs) < 3 or len(xs) != len(ys):
         return None
@@ -145,11 +164,17 @@ def _numeric_categorical_effect(rows: list[dict[str, str]], numeric: str, catego
         return None
     if len(groups) > 25:
         return None
-    spread = statistics.pstdev(all_values)
-    if spread == 0:
+
+    overall_mean = statistics.fmean(all_values)
+    total_ss = sum((value - overall_mean) ** 2 for value in all_values)
+    if total_ss == 0:
         return None
-    means = [statistics.fmean(values) for values in groups.values() if values]
-    return min((max(means) - min(means)) / spread, 5.0)
+    between_ss = sum(
+        len(values) * (statistics.fmean(values) - overall_mean) ** 2
+        for values in groups.values()
+        if values
+    )
+    return math.sqrt(max(0.0, min(between_ss / total_ss, 1.0)))
 
 
 def _missingness_association(rows: list[dict[str, str]], target: str, other: str, other_type: str) -> tuple[float, str] | None:
@@ -300,6 +325,7 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
             "semantic_type": semantic,
             "missing_count": missing,
             "missing_rate": missing / row_count,
+            "sample_missing_count": sum(_is_missing(row.get(column)) for row in sample_rows),
             "unique_count": None if column in unique_capped else len(unique_values[column]),
             "unique_count_capped": column in unique_capped,
         }
@@ -321,14 +347,24 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                     "p75": _quantile(values, 0.75),
                     "max": numeric_max.get(column),
                     "histogram": _histogram(values),
+                    "cdf": _empirical_cdf(values),
                 }
         elif semantic not in {"identifier", "text", "ignore"}:
             counts = Counter(sample_non_missing)
             total = sum(counts.values())
-            profile["categories"] = [
+            top = counts.most_common(TOP_CATEGORIES)
+            top_count = sum(count for _, count in top)
+            categories = [
                 {"value": value, "count": count, "share": count / total if total else 0.0}
-                for value, count in counts.most_common(TOP_CATEGORIES)
+                for value, count in top
             ]
+            if total > top_count:
+                categories.append({
+                    "value": "Other",
+                    "count": total - top_count,
+                    "share": (total - top_count) / total if total else 0.0,
+                })
+            profile["categories"] = categories
         elif semantic == "identifier":
             profile["uniqueness_rate"] = (
                 (len(unique_values[column]) / non_missing)
@@ -382,12 +418,13 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                 categorical = right if numeric == left else left
                 score = _numeric_categorical_effect(sample_rows, numeric, categorical)
                 if score is not None:
-                    item = {"left": left, "right": right, "kind": "Group mean spread", "score": score}
+                    item = {"left": left, "right": right, "kind": "Correlation ratio η", "score": score}
 
             if item:
                 relationships.append(item)
 
     relationships.sort(key=lambda item: abs(float(item["score"])), reverse=True)
+    relationship_columns = active_columns
 
     population_comparison: list[dict[str, Any]] = []
     for population_column in population_columns:
@@ -513,7 +550,13 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
             "duplicate_rate": duplicate_count / row_count,
         },
         "profiles": profiles,
-        "relationships": relationships[:50],
+        "relationships": relationships,
+        "relationship_columns": relationship_columns,
+        "relationship_columns_total": len([
+            column for column in columns
+            if semantic_types.get(column, "categorical") not in {"identifier", "text", "ignore", "datetime"}
+        ]),
+        "relationship_columns_limit": MAX_RELATIONSHIP_COLUMNS,
         "population_comparison": population_comparison,
         "time_analysis": time_analysis,
         "missingness_diagnostics": missingness_diagnostics,

@@ -231,3 +231,39 @@
   .eda-bar-row { grid-template-columns: 90px 1fr 55px; }
   .eda-tabs { margin-left: -4px; margin-right: -4px; }
 }
+
+
+.echart { width: 100%; min-width: 0; }
+.sortable-table th { padding: 0; }
+.sortable-table th button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; padding: 11px 12px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.sortable-table th button:hover { background: rgba(79,140,255,.06); color: #a9ccff; }
+.sortable-table th button span { color: #5e7190; font-size: 11px; }
+
+.distribution-grid { margin-top: 18px; }
+.cdf-panel { margin-top: 14px; }
+.cdf-panel > div:first-child { margin-bottom: 4px; }
+.cdf-panel h3 { margin-bottom: 4px; }
+
+.relationships-section .eda-control-row { align-items: flex-start; }
+.relationship-controls { width: min(620px, 100%); display: grid; grid-template-columns: 1fr 220px; gap: 10px; }
+.segmented-control { grid-column: 1 / -1; display: inline-flex; width: max-content; max-width: 100%; padding: 4px; border: 1px solid #263650; border-radius: 9px; background: #0a1220; }
+.segmented-control button { border: 0; border-radius: 6px; background: transparent; color: #74839a; padding: 7px 10px; font-size: 11px; font-weight: 750; }
+.segmented-control button.active { background: rgba(79,140,255,.14); color: #a9ccff; box-shadow: inset 0 0 0 1px rgba(79,140,255,.2); }
+.relationship-search { min-height: 42px; width: 100%; border: 1px solid #2a3850; border-radius: 9px; background: #0c1422; color: #e5edf9; padding: 0 12px; outline: none; }
+.relationship-search:focus { border-color: #4f8cff; box-shadow: 0 0 0 3px rgba(79,140,255,.09); }
+.relationship-search::placeholder { color: #58677e; }
+.heatmap-meta { margin: 18px 0 8px; color: #6e7e96; font-size: 11px; }
+.heatmap-scroll { overflow: auto; border: 1px solid #1e2c42; border-radius: 10px; background: #0a1220; }
+.heatmap-scroll .echart { min-width: 760px; }
+.relationship-table { margin-top: 16px; }
+
+@media (max-width: 900px) {
+  .relationship-controls { grid-template-columns: 1fr; }
+  .segmented-control { grid-column: 1; }
+}
+
+@media (max-width: 760px) {
+  .distribution-grid { grid-template-columns: 1fr; }
+  .segmented-control { width: 100%; }
+  .segmented-control button { flex: 1; }
+}

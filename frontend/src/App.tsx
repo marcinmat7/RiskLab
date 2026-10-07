@@ -1,4 +1,5 @@
-import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
+import * as echarts from 'echarts'
 
 type HealthResponse = { status: string; service: string }
 
@@ -51,6 +52,7 @@ type EdaProfile = {
   semantic_type: SemanticType
   missing_count: number
   missing_rate: number
+  sample_missing_count: number
   unique_count: number | null
   unique_count_capped: boolean
   numeric_summary?: {
@@ -63,6 +65,7 @@ type EdaProfile = {
     p75: number | null
     max: number
     histogram: { label: string; count: number }[]
+    cdf: { x: number; cdf: number }[]
   }
   categories?: { value: string; count: number; share: number }[]
   uniqueness_rate?: number | null
@@ -82,6 +85,9 @@ type EdaResult = {
   }
   profiles: EdaProfile[]
   relationships: { left: string; right: string; kind: string; score: number }[]
+  relationship_columns: string[]
+  relationship_columns_total: number
+  relationship_columns_limit: number
   population_comparison: {
     column: string
     groups: { value: string; sample_rows: number; share: number; missing_rate: number }[]
@@ -247,6 +253,25 @@ function MultiColumnPicker({
 }
 
 
+
+function EChart({ option, height = 360 }: { option: echarts.EChartsOption; height?: number }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!ref.current) return
+    const chart = echarts.init(ref.current)
+    chart.setOption(option)
+    const observer = new ResizeObserver(() => chart.resize())
+    observer.observe(ref.current)
+    return () => {
+      observer.disconnect()
+      chart.dispose()
+    }
+  }, [option])
+
+  return <div ref={ref} className="echart" style={{ height }} />
+}
+
 function MiniBarChart({ data }: { data: { label: string; value: number }[] }) {
   const max = Math.max(...data.map((item) => item.value), 1)
   return (
@@ -310,6 +335,11 @@ function App() {
   const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
   const [edaTimeMissingColumn, setEdaTimeMissingColumn] = useState<string>('')
   const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
+  const [qualitySort, setQualitySort] = useState<'column' | 'semantic' | 'missing' | 'unique' | 'quality'>('missing')
+  const [qualitySortDirection, setQualitySortDirection] = useState<'asc' | 'desc'>('desc')
+  const [relationshipSearch, setRelationshipSearch] = useState('')
+  const [relationshipMode, setRelationshipMode] = useState<'numeric' | 'mixed'>('numeric')
+  const [relationshipFocus, setRelationshipFocus] = useState('')
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -347,6 +377,11 @@ function App() {
     setEdaColumn('')
     setEdaTimeVariable('')
     setEdaTimeMissingColumn('')
+    setQualitySort('missing')
+    setQualitySortDirection('desc')
+    setRelationshipSearch('')
+    setRelationshipMode('numeric')
+    setRelationshipFocus('')
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -649,6 +684,143 @@ function App() {
     const populationEnabled = validationConfig.populationColumns.length > 0
     const timeEnabled = Boolean(validationConfig.timeColumn)
 
+    const sortedProfiles = [...edaResult.profiles].sort((a, b) => {
+      const direction = qualitySortDirection === 'asc' ? 1 : -1
+      const qualityRank = (profile: EdaProfile) => profile.missing_rate > .2 ? 2 : profile.missing_rate > .05 ? 1 : 0
+      let comparison = 0
+      if (qualitySort === 'column') comparison = a.column.localeCompare(b.column)
+      if (qualitySort === 'semantic') comparison = a.semantic_type.localeCompare(b.semantic_type)
+      if (qualitySort === 'missing') comparison = a.missing_rate - b.missing_rate
+      if (qualitySort === 'unique') comparison = (a.unique_count ?? Number.MAX_SAFE_INTEGER) - (b.unique_count ?? Number.MAX_SAFE_INTEGER)
+      if (qualitySort === 'quality') comparison = qualityRank(a) - qualityRank(b)
+      return comparison * direction
+    })
+
+    const changeQualitySort = (column: typeof qualitySort) => {
+      if (qualitySort === column) setQualitySortDirection((current) => current === 'asc' ? 'desc' : 'asc')
+      else {
+        setQualitySort(column)
+        setQualitySortDirection(column === 'column' || column === 'semantic' ? 'asc' : 'desc')
+      }
+    }
+
+    const histogramOption = (profile: EdaProfile, logarithmic: boolean): echarts.EChartsOption => {
+      const base = profile.numeric_summary
+        ? profile.numeric_summary.histogram.map((item) => ({ label: item.label, count: item.count, missing: false }))
+        : (profile.categories ?? []).map((item) => ({ label: item.value, count: item.count, missing: false }))
+      const rows = [...base, { label: 'Missing', count: profile.sample_missing_count, missing: true }]
+      return {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        grid: { left: 54, right: 18, top: 28, bottom: profile.categories ? 86 : 62 },
+        xAxis: {
+          type: 'category',
+          data: rows.map((item) => item.label),
+          axisLabel: { color: '#71809a', rotate: profile.categories ? 35 : 20, interval: 0, hideOverlap: true },
+          axisLine: { lineStyle: { color: '#263650' } },
+        },
+        yAxis: {
+          type: logarithmic ? 'log' : 'value',
+          min: logarithmic ? 1 : 0,
+          name: logarithmic ? 'Count (log)' : 'Count',
+          nameTextStyle: { color: '#71809a' },
+          axisLabel: { color: '#71809a' },
+          splitLine: { lineStyle: { color: '#1b293d' } },
+        },
+        series: [{
+          type: 'bar',
+          data: rows.map((item) => ({
+            value: logarithmic && item.count === 0 ? null : item.count,
+            itemStyle: { color: item.missing ? '#7b879a' : '#4f8cff' },
+          })),
+          barMaxWidth: 38,
+        }],
+      }
+    }
+
+    const cdfOption = (profile: EdaProfile): echarts.EChartsOption => ({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const point = Array.isArray(params) ? params[0] as { data?: [number, number] } : undefined
+          return point?.data ? 'Value: ' + formatMetric(point.data[0]) + '<br/>CDF: ' + (point.data[1] * 100).toFixed(1) + '%' : ''
+        },
+      },
+      grid: { left: 58, right: 20, top: 28, bottom: 48 },
+      xAxis: { type: 'value', name: profile.column, nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'CDF', nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      series: [{
+        type: 'line',
+        showSymbol: false,
+        smooth: false,
+        data: profile.numeric_summary?.cdf.map((point) => [point.x, point.cdf]) ?? [],
+        lineStyle: { width: 2, color: '#6ea8ff' },
+      }],
+    })
+
+    const relationshipLookup = new Map(
+      edaResult.relationships.flatMap((item) => [
+        [item.left + '|||' + item.right, item] as const,
+        [item.right + '|||' + item.left, item] as const,
+      ])
+    )
+    const numericRelationshipColumns = edaResult.relationship_columns.filter((column) => ['continuous', 'ordinal'].includes(validationConfig.semanticTypes[column] ?? 'categorical'))
+    const relationshipBaseColumns = relationshipMode === 'numeric' ? numericRelationshipColumns : edaResult.relationship_columns
+    const searchedRelationshipColumns = relationshipBaseColumns.filter((column) => column.toLowerCase().includes(relationshipSearch.trim().toLowerCase()))
+    const rankedRelationshipColumns = [...searchedRelationshipColumns].sort((a, b) => {
+      const maxFor = (column: string) => Math.max(0, ...edaResult.relationships.filter((item) => item.left === column || item.right === column).map((item) => Math.abs(item.score)))
+      return maxFor(b) - maxFor(a)
+    })
+    const focusedRelationshipColumns = relationshipFocus && relationshipBaseColumns.includes(relationshipFocus)
+      ? [relationshipFocus, ...rankedRelationshipColumns.filter((column) => column !== relationshipFocus).slice(0, 29)]
+      : rankedRelationshipColumns.slice(0, 30)
+
+    const heatmapOption = (mode: 'numeric' | 'mixed'): echarts.EChartsOption => {
+      const columns = focusedRelationshipColumns
+      const data: [number, number, number][] = []
+      columns.forEach((left, y) => {
+        columns.forEach((right, x) => {
+          if (left === right) {
+            data.push([x, y, 1])
+            return
+          }
+          const item = relationshipLookup.get(left + '|||' + right)
+          if (!item) return
+          if (mode === 'numeric' && item.kind !== 'Pearson correlation') return
+          const score = mode === 'numeric' ? item.score : (item.kind === 'Pearson correlation' ? Math.abs(item.score) : item.score)
+          data.push([x, y, score])
+        })
+      })
+
+      return {
+        backgroundColor: 'transparent',
+        tooltip: {
+          formatter: (params: unknown) => {
+            const point = params as { data?: [number, number, number] }
+            if (!point.data) return ''
+            return columns[point.data[1]] + ' ↔ ' + columns[point.data[0]] + '<br/><strong>' + point.data[2].toFixed(3) + '</strong>'
+          },
+        },
+        grid: { left: 140, right: 38, top: 34, bottom: 120 },
+        xAxis: { type: 'category', data: columns, axisLabel: { color: '#71809a', rotate: 45, interval: 0 }, splitArea: { show: true } },
+        yAxis: { type: 'category', data: columns, axisLabel: { color: '#71809a', interval: 0 }, splitArea: { show: true } },
+        visualMap: {
+          min: mode === 'numeric' ? -1 : 0,
+          max: 1,
+          calculable: true,
+          orient: 'horizontal',
+          left: 'center',
+          bottom: 8,
+          textStyle: { color: '#8b9aaf' },
+          inRange: mode === 'numeric'
+            ? { color: ['#ef6b73', '#17243a', '#4f8cff'] }
+            : { color: ['#101827', '#275eaf', '#78adff'] },
+        },
+        series: [{ type: 'heatmap', data, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,.45)' } } }],
+      }
+    }
+
     const renderLocked = (kind: 'population' | 'time') => (
       <section className="panel eda-locked-card">
         <div className="analysis-run-icon" aria-hidden="true"><span>🔒</span></div>
@@ -709,11 +881,17 @@ function App() {
 
             {edaTab === 'Data quality' && (
               <section className="panel eda-section">
-                <div className="panel-title"><h2>Column quality</h2><span>{edaResult.profiles.length} columns</span></div>
+                <div className="panel-title"><div><h2>Column quality</h2><p className="eda-muted">Click a column header to sort. Click it again to reverse the order.</p></div><span>{edaResult.profiles.length} columns</span></div>
                 <div className="table-wrap">
-                  <table>
-                    <thead><tr><th>Column</th><th>Semantic type</th><th>Missing</th><th>Unique</th><th>Quality signal</th></tr></thead>
-                    <tbody>{edaResult.profiles.map((profile) => (
+                  <table className="sortable-table">
+                    <thead><tr>
+                      <th><button onClick={() => changeQualitySort('column')}>Column <span>{qualitySort === 'column' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('semantic')}>Semantic type <span>{qualitySort === 'semantic' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('missing')}>Missing <span>{qualitySort === 'missing' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('unique')}>Unique <span>{qualitySort === 'unique' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                      <th><button onClick={() => changeQualitySort('quality')}>Quality signal <span>{qualitySort === 'quality' ? (qualitySortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
+                    </tr></thead>
+                    <tbody>{sortedProfiles.map((profile) => (
                       <tr key={profile.column}>
                         <td>{profile.column}</td><td>{profile.semantic_type}</td><td>{formatPercent(profile.missing_rate)}</td>
                         <td>{profile.unique_count_capped ? '>10,000' : (profile.unique_count ?? '—')}</td>
@@ -728,7 +906,7 @@ function App() {
             {edaTab === 'Distributions' && (
               <section className="panel eda-section">
                 <div className="eda-control-row">
-                  <div><h2>Column explorer</h2><p>Summary adapts to the semantic type selected in Validation.</p></div>
+                  <div><h2>Column explorer</h2><p>Numeric and categorical distributions include a separate Missing bucket. Log view uses a logarithmic count axis.</p></div>
                   <label className="form-field compact-field"><span>Column</span><select value={edaColumn} onChange={(e) => setEdaColumn(e.target.value)}>{edaResult.profiles.filter((profile) => profile.semantic_type !== 'ignore').map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
                 </div>
                 {activeProfile && (
@@ -748,10 +926,19 @@ function App() {
                           <div><span>P75</span><strong>{formatMetric(activeProfile.numeric_summary.p75)}</strong></div>
                           <div><span>Min / max</span><strong>{formatMetric(activeProfile.numeric_summary.min)} / {formatMetric(activeProfile.numeric_summary.max)}</strong></div>
                         </div>
-                        <MiniBarChart data={activeProfile.numeric_summary.histogram.map((item) => ({ label: item.label, value: item.count }))} />
+                        <div className="eda-chart-grid distribution-grid">
+                          <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
+                          <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
+                        </div>
+                        <article className="eda-chart-panel cdf-panel"><div><h3>Empirical cumulative distribution</h3><p className="eda-muted">CDF is calculated from the EDA reservoir sample.</p></div><EChart option={cdfOption(activeProfile)} height={390} /></article>
                       </>
                     )}
-                    {activeProfile.categories && <MiniBarChart data={activeProfile.categories.map((item) => ({ label: item.value, value: item.count }))} />}
+                    {activeProfile.categories && (
+                      <div className="eda-chart-grid distribution-grid">
+                        <article className="eda-chart-panel"><h3>Category counts · linear scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
+                        <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
+                      </div>
+                    )}
                     {activeProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{activeProfile.uniqueness_rate === null || activeProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(activeProfile.uniqueness_rate)}</strong></div>}
                     {activeProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(activeProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(activeProfile.text_summary.median_length)}</strong>, max <strong>{activeProfile.text_summary.max_length}</strong>.</div>}
                   </div>
@@ -760,9 +947,28 @@ function App() {
             )}
 
             {edaTab === 'Relationships' && (
-              <section className="panel eda-section">
-                <div className="panel-title"><div><h2>Strongest pairwise relationships</h2><p className="eda-muted">Metric depends on semantic types: Pearson correlation, Cramér's V or normalized group-mean spread.</p></div></div>
-                {edaResult.relationships.length ? <div className="table-wrap"><table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.slice(0, 25).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table></div> : <div className="eda-no-data">No eligible pairwise relationships were available.</div>}
+              <section className="panel eda-section relationships-section">
+                <div className="eda-control-row">
+                  <div><h2>Relationship heatmap</h2><p>Numeric view shows signed Pearson correlation. Mixed view shows association strength on a 0–1 scale using |Pearson|, Cramér's V and correlation ratio η.</p></div>
+                  <div className="relationship-controls">
+                    <div className="segmented-control">
+                      <button className={relationshipMode === 'numeric' ? 'active' : ''} onClick={() => { setRelationshipMode('numeric'); setRelationshipFocus('') }}>Numeric correlations</button>
+                      <button className={relationshipMode === 'mixed' ? 'active' : ''} onClick={() => { setRelationshipMode('mixed'); setRelationshipFocus('') }}>All-variable associations</button>
+                    </div>
+                    <input className="relationship-search" value={relationshipSearch} onChange={(e) => setRelationshipSearch(e.target.value)} placeholder="Search variables…" />
+                    <label className="form-field compact-field"><span>Focus variable</span><select value={relationshipFocus} onChange={(e) => setRelationshipFocus(e.target.value)}><option value="">Top associated variables</option>{relationshipBaseColumns.map((column) => <option key={column} value={column}>{column}</option>)}</select></label>
+                  </div>
+                </div>
+                {edaResult.relationship_columns_total > edaResult.relationship_columns_limit && <div className="message warning-message">This dataset has {edaResult.relationship_columns_total} eligible variables. The backend currently computes pairwise relationships for the first {edaResult.relationship_columns_limit}; the heatmap then shows up to 30 at once for readability.</div>}
+                {focusedRelationshipColumns.length ? (
+                  <>
+                    <div className="heatmap-meta">Showing {focusedRelationshipColumns.length} of {relationshipBaseColumns.length} variables. Search or choose a focus variable to navigate large matrices.</div>
+                    <div className="heatmap-scroll"><EChart option={heatmapOption(relationshipMode)} height={Math.max(520, focusedRelationshipColumns.length * 27 + 190)} /></div>
+                    <div className="table-wrap relationship-table">
+                      <table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.filter((item) => relationshipMode === 'mixed' || item.kind === 'Pearson correlation').slice(0, 20).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table>
+                    </div>
+                  </>
+                ) : <div className="eda-no-data">No variables match the current relationship view.</div>}
               </section>
             )}
 
