@@ -1,6 +1,7 @@
 import csv
 import io
 import random
+from datetime import datetime
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,48 @@ def health() -> dict[str, str]:
 def row_to_record(columns: list[str], row: list[str]) -> dict[str, str]:
     padded = row + [""] * max(0, len(columns) - len(row))
     return {column: padded[index] if index < len(padded) else "" for index, column in enumerate(columns)}
+
+
+def detect_value_type(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+
+    lowered = stripped.lower()
+    if lowered in {"true", "false", "yes", "no", "y", "n"}:
+        return "boolean"
+
+    try:
+        int(stripped)
+        return "integer"
+    except ValueError:
+        pass
+
+    try:
+        float(stripped)
+        return "numeric"
+    except ValueError:
+        pass
+
+    try:
+        datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+        return "datetime"
+    except ValueError:
+        return "string"
+
+
+def resolve_column_type(observed_types: set[str]) -> str:
+    if not observed_types:
+        return "empty"
+    if observed_types <= {"integer"}:
+        return "integer"
+    if observed_types <= {"integer", "numeric"}:
+        return "numeric"
+    if observed_types <= {"boolean"}:
+        return "boolean"
+    if observed_types <= {"datetime"}:
+        return "datetime"
+    return "string"
 
 
 @app.post("/datasets/preview")
@@ -73,6 +116,7 @@ async def preview_dataset(file: UploadFile = File(...)) -> dict[str, object]:
         first_preview: list[dict[str, object]] = []
         random_preview: list[dict[str, object]] = []
         reservoir_seen = 0
+        observed_types: dict[str, set[str]] = {column: set() for column in columns}
 
         for row in reader:
             row_count += 1
@@ -83,6 +127,11 @@ async def preview_dataset(file: UploadFile = File(...)) -> dict[str, object]:
                 )
 
             record = row_to_record(columns, row)
+            for column, value in record.items():
+                detected_type = detect_value_type(value)
+                if detected_type is not None:
+                    observed_types[column].add(detected_type)
+
             item = {"row_number": row_count, "values": record}
 
             if row_count <= PREVIEW_ROWS:
@@ -108,12 +157,15 @@ async def preview_dataset(file: UploadFile = File(...)) -> dict[str, object]:
                 "may take longer to process."
             )
 
+        column_types = {column: resolve_column_type(observed_types[column]) for column in columns}
+
         return {
             "filename": filename,
             "file_size_bytes": file.size,
             "row_count": row_count,
             "column_count": len(columns),
             "columns": columns,
+            "column_types": column_types,
             "first_preview": first_preview,
             "random_preview": random_preview,
             "delimiter": dialect.delimiter,

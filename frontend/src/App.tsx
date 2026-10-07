@@ -13,6 +13,7 @@ type DatasetPreview = {
   row_count: number
   column_count: number
   columns: string[]
+  column_types: Record<string, PhysicalType>
   first_preview: PreviewRow[]
   random_preview: PreviewRow[]
   delimiter: string
@@ -26,6 +27,8 @@ type AnalysisSection = Exclude<Section, 'Overview' | 'Data'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
 type ScoreDirection = 'higher-risk' | 'lower-risk'
+type PhysicalType = 'integer' | 'numeric' | 'boolean' | 'datetime' | 'string' | 'empty'
+type SemanticType = 'continuous' | 'categorical' | 'ordinal' | 'identifier' | 'datetime' | 'boolean' | 'text' | 'ignore'
 
 type ValidationConfig = {
   predictionColumn: string
@@ -37,6 +40,7 @@ type ValidationConfig = {
   populationColumns: string[]
   sensitiveColumns: string[]
   featureColumns: string[]
+  semanticTypes: Record<string, SemanticType>
 }
 
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
@@ -71,6 +75,7 @@ const initialConfig: ValidationConfig = {
   populationColumns: [],
   sensitiveColumns: [],
   featureColumns: [],
+  semanticTypes: {},
 }
 
 const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
@@ -87,6 +92,25 @@ const formatFileSize = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const semanticTypeOptions: { value: SemanticType; label: string }[] = [
+  { value: 'continuous', label: 'Continuous' },
+  { value: 'categorical', label: 'Categorical' },
+  { value: 'ordinal', label: 'Ordinal' },
+  { value: 'identifier', label: 'Identifier' },
+  { value: 'datetime', label: 'Date / time' },
+  { value: 'boolean', label: 'Boolean' },
+  { value: 'text', label: 'Text' },
+  { value: 'ignore', label: 'Ignore' },
+]
+
+const suggestSemanticType = (physicalType: PhysicalType): SemanticType => {
+  if (physicalType === 'integer' || physicalType === 'numeric') return 'continuous'
+  if (physicalType === 'boolean') return 'boolean'
+  if (physicalType === 'datetime') return 'datetime'
+  if (physicalType === 'empty') return 'ignore'
+  return 'categorical'
 }
 
 const statusLabel = (status: AnalysisStatus) => ({
@@ -114,6 +138,10 @@ function PreviewTable({ columns, rows }: { columns: string[]; rows: PreviewRow[]
       </table>
     </div>
   )
+}
+
+function UsedBy({ modules }: { modules: string[] }) {
+  return <div className="used-by"><span>Used by</span>{modules.map((module) => <span className="use-badge" key={module}>{module}</span>)}</div>
 }
 
 function MultiColumnPicker({
@@ -224,7 +252,14 @@ function App() {
       const response = await fetch('http://localhost:8000/datasets/preview', { method: 'POST', body: formData })
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
-      setPreview(body as DatasetPreview)
+      const dataset = body as DatasetPreview
+      setPreview(dataset)
+      setValidationConfig({
+        ...initialConfig,
+        semanticTypes: Object.fromEntries(
+          dataset.columns.map((column) => [column, suggestSemanticType(dataset.column_types[column] ?? 'string')])
+        ) as Record<string, SemanticType>,
+      })
       setUploadStatus('ready')
       setAnalysisStatus(initialStatuses())
     } catch (err) {
@@ -352,10 +387,10 @@ function App() {
         <section className="panel setup-card">
           <div className="setup-section-heading"><div><span className="setup-number">1</span><div><h2>Required setup</h2><p>These fields are required before validation can run.</p></div></div></div>
           <div className="form-grid">
-            <label className="form-field"><span>Model output column <b>*</b></span><select value={validationConfig.predictionColumn} onChange={(e) => setValidationConfig({...validationConfig, predictionColumn:e.target.value})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
-            <label className="form-field"><span>Output type <b>*</b></span><select value={validationConfig.predictionType} onChange={(e) => setValidationConfig({...validationConfig, predictionType:e.target.value as PredictionType})}><option value="pd">Probability of Default (PD)</option><option value="score">Score</option></select></label>
-            <label className="form-field"><span>Default indicator <b>*</b></span><select value={validationConfig.targetColumn} onChange={(e) => setValidationConfig({...validationConfig, targetColumn:e.target.value, positiveClass:''})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
-            <label className="form-field"><span>Default class <b>*</b></span><select value={validationConfig.positiveClass} onChange={(e) => setValidationConfig({...validationConfig, positiveClass:e.target.value})} disabled={!validationConfig.targetColumn}><option value="">Select value…</option>{targetValues.map((value) => <option key={value} value={value}>{value}</option>)}</select><small>Values are detected from the current preview sample.</small></label>
+            <label className="form-field"><span>Model output column <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Fairness']} /><select value={validationConfig.predictionColumn} onChange={(e) => setValidationConfig({...validationConfig, predictionColumn:e.target.value})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+            <label className="form-field"><span>Output type <b>*</b></span><UsedBy modules={['Discrimination', 'Calibration']} /><select value={validationConfig.predictionType} onChange={(e) => setValidationConfig({...validationConfig, predictionType:e.target.value as PredictionType})}><option value="pd">Probability of Default (PD)</option><option value="score">Score</option></select></label>
+            <label className="form-field"><span>Default indicator <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Segments', 'Fairness']} /><select value={validationConfig.targetColumn} onChange={(e) => setValidationConfig({...validationConfig, targetColumn:e.target.value, positiveClass:''})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+            <label className="form-field"><span>Default class <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Fairness']} /><select value={validationConfig.positiveClass} onChange={(e) => setValidationConfig({...validationConfig, positiveClass:e.target.value})} disabled={!validationConfig.targetColumn}><option value="">Select value…</option>{targetValues.map((value) => <option key={value} value={value}>{value}</option>)}</select><small>Values are detected from the current preview sample.</small></label>
           </div>
 
           {validationConfig.predictionType === 'score' && (
@@ -369,26 +404,52 @@ function App() {
           {validationConfig.predictionColumn && validationConfig.predictionColumn === validationConfig.targetColumn && <div className="inline-validation-error">Model output and default indicator must use different columns.</div>}
         </section>
 
+        <section className="panel setup-card column-types-card">
+          <div className="setup-section-heading">
+            <div><span className="setup-number">2</span><div><h2>Column types</h2><p>RiskLab detects the physical type from the CSV. Review or change the semantic type used by downstream analyses.</p></div></div>
+            <UsedBy modules={['EDA', 'Segments', 'Stability', 'Challenger models']} />
+          </div>
+          <div className="column-type-table">
+            <div className="column-type-row column-type-head"><span>Column</span><span>Detected physical type</span><span>Semantic type</span></div>
+            {preview.columns.map((column) => (
+              <div className="column-type-row" key={column}>
+                <strong>{column}</strong>
+                <span className="physical-type-badge">{preview.column_types[column] ?? 'string'}</span>
+                <select
+                  value={validationConfig.semanticTypes[column] ?? suggestSemanticType(preview.column_types[column] ?? 'string')}
+                  onChange={(e) => setValidationConfig({
+                    ...validationConfig,
+                    semanticTypes: { ...validationConfig.semanticTypes, [column]: e.target.value as SemanticType },
+                  })}
+                >
+                  {semanticTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div className="type-note">Detected types are suggestions only. RiskLab never infers business meaning from a column name; the semantic type remains under user control.</div>
+        </section>
+
         <section className="panel setup-card optional-card">
-          <div className="setup-section-heading"><div><span className="setup-number optional">2</span><div><h2>Optional analysis settings</h2><p>These roles unlock time, representativeness, fairness and challenger-model analyses later.</p></div></div><span className="optional-badge">Optional</span></div>
+          <div className="setup-section-heading"><div><span className="setup-number optional">3</span><div><h2>Optional analysis settings</h2><p>These roles unlock time, representativeness, fairness and challenger-model analyses later.</p></div></div><span className="optional-badge">Optional</span></div>
 
           <div className="optional-setting">
-            <div className="setting-copy"><h3>Time analysis</h3><p>Select a date or time column for performance and stability analysis over time.</p></div>
+            <div className="setting-copy"><h3>Time analysis</h3><p>Select a date or time column for performance and stability analysis over time.</p><UsedBy modules={['EDA', 'Stability']} /></div>
             <label className="form-field compact-field"><span>Time column</span><select value={validationConfig.timeColumn} onChange={(e) => setValidationConfig({...validationConfig, timeColumn:e.target.value})}><option value="">Not configured</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
           </div>
 
           <div className="optional-setting stacked">
-            <div className="setting-copy"><h3>Sample / population columns</h3><p>Use columns such as train/test, development/validation, country or portfolio to compare sample representativeness.</p></div>
+            <div className="setting-copy"><h3>Sample / population columns</h3><p>Use columns such as train/test, development/validation, country or portfolio to compare sample representativeness.</p><UsedBy modules={['EDA', 'Stability', 'Segments']} /></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.populationColumns} onChange={(value) => setValidationConfig({...validationConfig, populationColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
 
           <div className="optional-setting stacked">
-            <div className="setting-copy"><h3>Sensitive attributes</h3><p>Mark columns such as sex or age for future fairness and bias analysis.</p></div>
+            <div className="setting-copy"><h3>Sensitive attributes</h3><p>Mark columns such as sex or age for future fairness and bias analysis.</p><UsedBy modules={['Fairness']} /></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.sensitiveColumns} onChange={(value) => setValidationConfig({...validationConfig, sensitiveColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
 
           <div className="optional-setting stacked">
-            <div className="setting-copy"><h3>Model features</h3><p>Select variables used to build the submitted model. RiskLab will later use them for challenger models and explainability.</p></div>
+            <div className="setting-copy"><h3>Model features</h3><p>Select variables used to build the submitted model. RiskLab will later use them for challenger models and explainability.</p><UsedBy modules={['Challenger models', 'SHAP']} /></div>
             <div className="picker-toolbar"><button className="text-button" onClick={() => setValidationConfig({...validationConfig, featureColumns:preview.columns.filter((c) => ![validationConfig.predictionColumn, validationConfig.targetColumn].includes(c))})}>Select all available</button><button className="text-button" onClick={() => setValidationConfig({...validationConfig, featureColumns:[]})}>Clear</button></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.featureColumns} onChange={(value) => setValidationConfig({...validationConfig, featureColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
