@@ -91,17 +91,34 @@ type EdaResult = {
   population_comparison: {
     column: string
     groups: { value: string; sample_rows: number; share: number; missing_rate: number }[]
+    references: {
+      reference: string
+      comparisons: {
+        comparison: string
+        variables: {
+          column: string
+          semantic_type: SemanticType
+          psi: number
+          distribution: { label: string; reference_share: number; comparison_share: number }[]
+        }[]
+      }[]
+    }[]
   }[]
   time_analysis: null | {
     time_column: string
-    granularity: string
-    buckets: {
+    numeric_columns: string[]
+    granularities: Record<TimeGranularity, {
       bucket: string
       observations: number
       missing_rate: number
-      column_missing_rates: Record<string, number>
-      variables: Record<string, { mean: number; median: number; p25: number | null; p75: number | null; missing_rate: number }>
-    }[]
+      variables: Record<string, {
+        min: number | null
+        max: number | null
+        mean: number | null
+        median: number | null
+        missing_rate: number
+      }>
+    }[]>
   }
   missingness_diagnostics: {
     column: string
@@ -254,12 +271,16 @@ function MultiColumnPicker({
 
 
 
-function EChart({ option, height = 360 }: { option: echarts.EChartsOption; height?: number }) {
+function EChart({ option, height = 360, group }: { option: echarts.EChartsOption; height?: number; group?: string }) {
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!ref.current) return
     const chart = echarts.init(ref.current)
+    if (group) {
+      chart.group = group
+      echarts.connect(group)
+    }
     chart.setOption(option)
     const observer = new ResizeObserver(() => chart.resize())
     observer.observe(ref.current)
@@ -267,7 +288,7 @@ function EChart({ option, height = 360 }: { option: echarts.EChartsOption; heigh
       observer.disconnect()
       chart.dispose()
     }
-  }, [option])
+  }, [option, group])
 
   return <div ref={ref} className="echart" style={{ height }} />
 }
@@ -340,6 +361,11 @@ function App() {
   const [relationshipSearch, setRelationshipSearch] = useState('')
   const [relationshipMode, setRelationshipMode] = useState<'numeric' | 'mixed'>('numeric')
   const [relationshipFocus, setRelationshipFocus] = useState('')
+  const [populationColumn, setPopulationColumn] = useState('')
+  const [populationReference, setPopulationReference] = useState('')
+  const [populationComparison, setPopulationComparison] = useState('')
+  const [populationVariable, setPopulationVariable] = useState('')
+  const [timeWorkspace, setTimeWorkspace] = useState<string[]>([])
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -382,6 +408,11 @@ function App() {
     setRelationshipSearch('')
     setRelationshipMode('numeric')
     setRelationshipFocus('')
+    setPopulationColumn('')
+    setPopulationReference('')
+    setPopulationComparison('')
+    setPopulationVariable('')
+    setTimeWorkspace([])
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -484,6 +515,20 @@ function App() {
       setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
       setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
       setEdaTimeMissingColumn((current) => current || result.profiles.find((profile) => profile.missing_count > 0)?.column || result.profiles[0]?.column || '')
+      const firstPopulation = result.population_comparison[0]
+      if (firstPopulation) {
+        setPopulationColumn((current) => current || firstPopulation.column)
+        const firstReference = firstPopulation.references[0]
+        if (firstReference) {
+          setPopulationReference((current) => current || firstReference.reference)
+          const firstComparison = firstReference.comparisons[0]
+          if (firstComparison) {
+            setPopulationComparison((current) => current || firstComparison.comparison)
+            setPopulationVariable((current) => current || firstComparison.variables[0]?.column || '')
+          }
+        }
+      }
+      setTimeWorkspace((current) => current.length ? current : (result.time_analysis?.numeric_columns.slice(0, 2) ?? []))
       setAnalysisStatus((current) => ({ ...current, EDA: 'ready' }))
       setLastRun((current) => ({ ...current, EDA: new Date().toLocaleString() }))
     } catch (err) {
@@ -821,6 +866,81 @@ function App() {
       }
     }
 
+    const activePopulation = edaResult.population_comparison.find((item) => item.column === populationColumn) ?? edaResult.population_comparison[0]
+    const activeReference = activePopulation?.references.find((item) => item.reference === populationReference) ?? activePopulation?.references[0]
+    const activeComparison = activeReference?.comparisons.find((item) => item.comparison === populationComparison) ?? activeReference?.comparisons[0]
+    const activePopulationVariable = activeComparison?.variables.find((item) => item.column === populationVariable) ?? activeComparison?.variables[0]
+    const psiRanking = activeReference ? Array.from(new Set(activeReference.comparisons.flatMap((comparison) => comparison.variables.map((variable) => variable.column)))).map((column) => {
+      const values = Object.fromEntries(activeReference.comparisons.map((comparison) => [
+        comparison.comparison,
+        comparison.variables.find((variable) => variable.column === column)?.psi ?? 0,
+      ]))
+      const first = activeReference.comparisons.flatMap((comparison) => comparison.variables).find((variable) => variable.column === column)
+      return {
+        column,
+        semantic_type: first?.semantic_type ?? 'categorical' as SemanticType,
+        values,
+        maxPsi: Math.max(0, ...Object.values(values)),
+      }
+    }).sort((a, b) => b.maxPsi - a.maxPsi) : []
+
+    const populationDistributionOption = (): echarts.EChartsOption => {
+      const variable = activePopulationVariable
+      const rows = variable?.distribution ?? []
+      return {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+        grid: { left: 58, right: 20, top: 42, bottom: 90 },
+        xAxis: { type: 'category', data: rows.map((row) => row.label), axisLabel: { color: '#71809a', rotate: 30, interval: 0, hideOverlap: true } },
+        yAxis: { type: 'value', name: 'Share', max: 1, axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+        series: [
+          { name: activeReference?.reference ?? 'Reference', type: 'bar', data: rows.map((row) => row.reference_share), itemStyle: { color: '#4f8cff' }, barMaxWidth: 34 },
+          { name: activeComparison?.comparison ?? 'Comparison', type: 'bar', data: rows.map((row) => row.comparison_share), itemStyle: { color: '#8b99ad' }, barMaxWidth: 34 },
+        ],
+      }
+    }
+
+    const currentTimeBuckets = edaResult.time_analysis?.granularities[timeGranularity] ?? []
+    const timeMissingOption = (column: string): echarts.EChartsOption => ({
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
+      grid: { left: 58, right: 18, top: 28, bottom: 66 },
+      xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'Missing', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
+      series: [{
+        name: 'Missing %',
+        type: 'line',
+        showSymbol: false,
+        data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.missing_rate ?? null),
+        lineStyle: { width: 2, color: '#8b99ad' },
+        areaStyle: { opacity: .08, color: '#8b99ad' },
+      }],
+    })
+
+    const timeStatsOption = (column: string): echarts.EChartsOption => ({
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 62, right: 18, top: 42, bottom: 66 },
+      xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', name: column, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
+      series: [
+        { name: 'Min', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.min ?? null), lineStyle: { width: 1, type: 'dashed', color: '#65758d' } },
+        { name: 'Max', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.max ?? null), lineStyle: { width: 1, type: 'dashed', color: '#91a0b7' } },
+        { name: 'Mean', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.mean ?? null), lineStyle: { width: 2, color: '#4f8cff' } },
+        { name: 'Median', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.median ?? null), lineStyle: { width: 2, color: '#69e7ad' } },
+      ],
+    })
+
+    const addTimeVariable = (column: string) => {
+      setTimeWorkspace((current) => current.includes(column) ? current : [...current, column])
+    }
+
     const renderLocked = (kind: 'population' | 'time') => (
       <section className="panel eda-locked-card">
         <div className="analysis-run-icon" aria-hidden="true"><span>🔒</span></div>
@@ -973,40 +1093,89 @@ function App() {
             )}
 
             {edaTab === 'Population comparison' && (!populationEnabled ? renderLocked('population') : (
-              <section className="panel eda-section">
-                <div className="panel-title"><div><h2>Population comparison</h2><p className="eda-muted">Group size and overall missingness for configured population columns.</p></div></div>
-                {edaResult.population_comparison.map((population) => (
-                  <div className="eda-population-block" key={population.column}>
-                    <h3>{population.column}</h3>
-                    <div className="table-wrap"><table><thead><tr><th>Group</th><th>Sample rows</th><th>Share</th><th>Missing cells</th></tr></thead><tbody>{population.groups.map((group) => <tr key={group.value}><td>{group.value}</td><td>{group.sample_rows.toLocaleString()}</td><td>{formatPercent(group.share)}</td><td>{formatPercent(group.missing_rate)}</td></tr>)}</tbody></table></div>
+              <section className="panel eda-section population-analysis">
+                <div className="eda-control-row">
+                  <div><h2>Population comparison</h2><p>PSI is calculated for every eligible variable using the selected reference population. Numeric bins are defined on the reference population; Missing is a separate bin.</p></div>
+                  <div className="population-controls">
+                    <label className="form-field compact-field"><span>Population column</span><select value={activePopulation?.column ?? ''} onChange={(e) => { const next = edaResult.population_comparison.find((item) => item.column === e.target.value); setPopulationColumn(e.target.value); setPopulationReference(next?.references[0]?.reference ?? ''); setPopulationComparison(next?.references[0]?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.references[0]?.comparisons[0]?.variables[0]?.column ?? '') }}>{edaResult.population_comparison.map((population) => <option key={population.column} value={population.column}>{population.column}</option>)}</select></label>
+                    <label className="form-field compact-field"><span>Reference</span><select value={activeReference?.reference ?? ''} onChange={(e) => { const next = activePopulation?.references.find((item) => item.reference === e.target.value); setPopulationReference(e.target.value); setPopulationComparison(next?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.comparisons[0]?.variables[0]?.column ?? '') }}>{activePopulation?.references.map((reference) => <option key={reference.reference} value={reference.reference}>{reference.reference}</option>)}</select></label>
+                    <label className="form-field compact-field"><span>Compare with</span><select value={activeComparison?.comparison ?? ''} onChange={(e) => { const next = activeReference?.comparisons.find((item) => item.comparison === e.target.value); setPopulationComparison(e.target.value); setPopulationVariable(next?.variables[0]?.column ?? '') }}>{activeReference?.comparisons.map((comparison) => <option key={comparison.comparison} value={comparison.comparison}>{comparison.comparison}</option>)}</select></label>
                   </div>
-                ))}
+                </div>
+
+                {activePopulation && <div className="population-group-strip">{activePopulation.groups.map((group) => <div key={group.value}><span>{group.value}</span><strong>{group.sample_rows.toLocaleString()}</strong><small>{formatPercent(group.share)} · missing {formatPercent(group.missing_rate)}</small></div>)}</div>}
+
+                {activeComparison && (
+                  <div className="population-layout">
+                    <div className="population-ranking">
+                      <div className="panel-title"><div><h3>PSI ranking</h3><p className="eda-muted">Variables are ranked by their highest PSI against any comparison group. Click a variable to inspect the currently selected comparison.</p></div><span>Reference: {activeReference?.reference}</span></div>
+                      <div className="table-wrap">
+                        <table className="clickable-table psi-table">
+                          <thead><tr><th>Variable</th><th>Type</th>{activeReference?.comparisons.map((comparison) => <th key={comparison.comparison}>PSI · {comparison.comparison}</th>)}<th>Max PSI</th><th>Signal</th></tr></thead>
+                          <tbody>{psiRanking.map((variable) => (
+                            <tr key={variable.column} className={activePopulationVariable?.column === variable.column ? 'selected-row' : ''} onClick={() => setPopulationVariable(variable.column)}>
+                              <td>{variable.column}</td><td>{variable.semantic_type}</td>
+                              {activeReference?.comparisons.map((comparison) => <td key={comparison.comparison}>{(variable.values[comparison.comparison] ?? 0).toFixed(4)}</td>)}
+                              <td><strong>{variable.maxPsi.toFixed(4)}</strong></td>
+                              <td><span className={variable.maxPsi >= .25 ? 'eda-signal bad' : variable.maxPsi >= .1 ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= .25 ? 'High' : variable.maxPsi >= .1 ? 'Moderate' : 'Low'}</span></td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="population-drilldown">
+                      {activePopulationVariable ? (
+                        <>
+                          <div className="population-drilldown-head"><div><h3>{activePopulationVariable.column}</h3><p>{activeReference?.reference} vs {activeComparison.comparison}</p></div><strong>PSI {activePopulationVariable.psi.toFixed(4)}</strong></div>
+                          <EChart option={populationDistributionOption()} height={430} />
+                        </>
+                      ) : <div className="eda-no-data">Select a variable to inspect its distributions.</div>}
+                    </div>
+                  </div>
+                )}
               </section>
             ))}
 
             {edaTab === 'Time analysis' && (!timeEnabled ? renderLocked('time') : (
-              <section className="panel eda-section">
+              <section className="panel eda-section time-workspace-section">
                 <div className="eda-control-row">
-                  <div><h2>Time analysis</h2><p>Volume, missingness and variable behaviour over the configured time column.</p></div>
-                  <label className="form-field compact-field"><span>Aggregation</span><select value={timeGranularity} onChange={(e) => setTimeGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Change aggregation and run EDA again.</small></label>
+                  <div><h2>Time analysis workspace</h2><p>Change aggregation instantly, add variables to the workspace, then drag or use the add button. Zoom one chart and all time charts stay synchronized.</p></div>
+                  <label className="form-field compact-field"><span>Aggregation</span><select value={timeGranularity} onChange={(e) => setTimeGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Updates immediately — no EDA rerun required.</small></label>
                 </div>
-                {edaResult.time_analysis?.buckets.length ? (
-                  <>
-                    <div className="eda-chart-grid">
-                      <article className="eda-chart-panel"><h3>Observation volume</h3><MiniLineChart data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.observations }))} /></article>
-                      <article className="eda-chart-panel"><h3>Missing cells over time</h3><MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.missing_rate * 100 }))} /></article>
+
+                {edaResult.time_analysis && currentTimeBuckets.length ? (
+                  <div className="time-workspace-layout">
+                    <aside className="time-variable-palette">
+                      <div><h3>Available variables</h3><p>Drag into the workspace or click +.</p></div>
+                      <div className="time-variable-list">{edaResult.time_analysis.numeric_columns.map((column) => (
+                        <button
+                          key={column}
+                          draggable
+                          className={timeWorkspace.includes(column) ? 'time-variable-chip selected' : 'time-variable-chip'}
+                          onDragStart={(event) => event.dataTransfer.setData('text/plain', column)}
+                          onClick={() => addTimeVariable(column)}
+                        ><span>⋮⋮</span>{column}<strong>+</strong></button>
+                      ))}</div>
+                    </aside>
+
+                    <div
+                      className="time-drop-zone"
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => { event.preventDefault(); const column = event.dataTransfer.getData('text/plain'); if (column) addTimeVariable(column) }}
+                    >
+                      {timeWorkspace.length === 0 ? (
+                        <div className="time-empty-drop"><strong>Drop numeric variables here</strong><span>Each variable creates a missingness chart and a min / max / mean / median chart.</span></div>
+                      ) : timeWorkspace.map((column) => (
+                        <article className="time-variable-panel" key={column}>
+                          <div className="time-variable-panel-head"><div><h3>{column}</h3><span>{timeGranularity} aggregation</span></div><button onClick={() => setTimeWorkspace((current) => current.filter((item) => item !== column))}>Remove</button></div>
+                          <div className="time-chart-pair">
+                            <div className="eda-chart-panel"><h4>Missing values</h4><EChart option={timeMissingOption(column)} height={330} group="risklab-time-workspace" /></div>
+                            <div className="eda-chart-panel"><h4>Min / max / mean / median</h4><EChart option={timeStatsOption(column)} height={330} group="risklab-time-workspace" /></div>
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                    <div className="eda-control-row variable-time-control">
-                      <div><h3>Column missingness over time</h3><p className="eda-muted">Track whether data quality changes for a specific variable.</p></div>
-                      <label className="form-field compact-field"><span>Column</span><select value={edaTimeMissingColumn} onChange={(e) => setEdaTimeMissingColumn(e.target.value)}>{edaResult.profiles.map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
-                    </div>
-                    {edaTimeMissingColumn && <MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: (bucket.column_missing_rates[edaTimeMissingColumn] ?? 0) * 100 }))} />}
-                    <div className="eda-control-row variable-time-control">
-                      <div><h3>Variable behaviour over time</h3><p className="eda-muted">Median trend for continuous / ordinal variables.</p></div>
-                      <label className="form-field compact-field"><span>Variable</span><select value={edaTimeVariable} onChange={(e) => setEdaTimeVariable(e.target.value)}>{edaResult.profiles.filter((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type)).map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
-                    </div>
-                    {edaTimeVariable && <MiniLineChart data={edaResult.time_analysis.buckets.filter((bucket) => bucket.variables[edaTimeVariable]).map((bucket) => ({ label: bucket.bucket, value: bucket.variables[edaTimeVariable].median }))} />}
-                  </>
+                  </div>
                 ) : <div className="eda-no-data">No parseable time values were found for {validationConfig.timeColumn}.</div>}
               </section>
             ))}

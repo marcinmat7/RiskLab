@@ -209,6 +209,134 @@ def _missingness_association(rows: list[dict[str, str]], target: str, other: str
     return score, f"missing-rate range {score * 100:.1f} pp across groups"
 
 
+def _psi_component(reference_share: float, comparison_share: float, epsilon: float = 1e-6) -> float:
+    ref = max(reference_share, epsilon)
+    cmp = max(comparison_share, epsilon)
+    return (cmp - ref) * math.log(cmp / ref)
+
+
+def _numeric_population_distribution(
+    reference_rows: list[dict[str, str]],
+    comparison_rows: list[dict[str, str]],
+    column: str,
+    bins: int = 10,
+) -> tuple[float, list[dict[str, Any]]]:
+    reference_values = sorted(
+        value for row in reference_rows
+        if (value := _to_float(row.get(column))) is not None
+    )
+    comparison_values = [
+        value for row in comparison_rows
+        if (value := _to_float(row.get(column))) is not None
+    ]
+    if len(reference_values) < 5:
+        return 0.0, []
+
+    raw_edges = [_quantile(reference_values, index / bins) for index in range(bins + 1)]
+    edges = []
+    for edge in raw_edges:
+        if edge is not None and (not edges or edge > edges[-1]):
+            edges.append(edge)
+    if len(edges) < 2:
+        edges = [reference_values[0], reference_values[-1]]
+
+    def counts_for(rows: list[dict[str, str]], values: list[float]) -> list[int]:
+        counts = [0] * (len(edges) - 1)
+        for value in values:
+            index = len(edges) - 2
+            for candidate in range(len(edges) - 1):
+                if value <= edges[candidate + 1]:
+                    index = candidate
+                    break
+            counts[index] += 1
+        counts.append(sum(_is_missing(row.get(column)) for row in rows))
+        return counts
+
+    reference_counts = counts_for(reference_rows, reference_values)
+    comparison_counts = counts_for(comparison_rows, comparison_values)
+    reference_total = max(sum(reference_counts), 1)
+    comparison_total = max(sum(comparison_counts), 1)
+
+    rows = []
+    psi = 0.0
+    for index in range(len(edges) - 1):
+        label = f"{edges[index]:.4g}–{edges[index + 1]:.4g}"
+        reference_share = reference_counts[index] / reference_total
+        comparison_share = comparison_counts[index] / comparison_total
+        psi += _psi_component(reference_share, comparison_share)
+        rows.append({
+            "label": label,
+            "reference_share": reference_share,
+            "comparison_share": comparison_share,
+        })
+
+    reference_missing = reference_counts[-1] / reference_total
+    comparison_missing = comparison_counts[-1] / comparison_total
+    psi += _psi_component(reference_missing, comparison_missing)
+    rows.append({
+        "label": "Missing",
+        "reference_share": reference_missing,
+        "comparison_share": comparison_missing,
+    })
+    return psi, rows
+
+
+def _categorical_population_distribution(
+    reference_rows: list[dict[str, str]],
+    comparison_rows: list[dict[str, str]],
+    column: str,
+) -> tuple[float, list[dict[str, Any]]]:
+    reference_counter = Counter(
+        row.get(column, "").strip() for row in reference_rows
+        if not _is_missing(row.get(column))
+    )
+    comparison_counter = Counter(
+        row.get(column, "").strip() for row in comparison_rows
+        if not _is_missing(row.get(column))
+    )
+    labels = [
+        value for value, _ in
+        (reference_counter + comparison_counter).most_common(20)
+    ]
+
+    reference_other = sum(count for value, count in reference_counter.items() if value not in labels)
+    comparison_other = sum(count for value, count in comparison_counter.items() if value not in labels)
+    reference_total = max(len(reference_rows), 1)
+    comparison_total = max(len(comparison_rows), 1)
+    rows = []
+    psi = 0.0
+
+    for label in labels:
+        reference_share = reference_counter[label] / reference_total
+        comparison_share = comparison_counter[label] / comparison_total
+        psi += _psi_component(reference_share, comparison_share)
+        rows.append({
+            "label": label,
+            "reference_share": reference_share,
+            "comparison_share": comparison_share,
+        })
+
+    if reference_other or comparison_other:
+        reference_share = reference_other / reference_total
+        comparison_share = comparison_other / comparison_total
+        psi += _psi_component(reference_share, comparison_share)
+        rows.append({
+            "label": "Other",
+            "reference_share": reference_share,
+            "comparison_share": comparison_share,
+        })
+
+    reference_missing = sum(_is_missing(row.get(column)) for row in reference_rows) / reference_total
+    comparison_missing = sum(_is_missing(row.get(column)) for row in comparison_rows) / comparison_total
+    psi += _psi_component(reference_missing, comparison_missing)
+    rows.append({
+        "label": "Missing",
+        "reference_share": reference_missing,
+        "comparison_share": comparison_missing,
+    })
+    return psi, rows
+
+
 def _time_bucket(dt: datetime, granularity: str) -> str:
     if granularity == "daily":
         return dt.strftime("%Y-%m-%d")
@@ -433,10 +561,12 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
         groups: dict[str, list[dict[str, str]]] = defaultdict(list)
         for row in sample_rows:
             value = row.get(population_column, "").strip()
-            if value and len(groups) < 30 or value in groups:
+            if (value and len(groups) < 30) or value in groups:
                 groups[value].append(row)
+
+        ordered_groups = sorted(groups.items(), key=lambda item: len(item[1]), reverse=True)[:20]
         group_results = []
-        for value, rows in sorted(groups.items(), key=lambda item: len(item[1]), reverse=True)[:20]:
+        for value, rows in ordered_groups:
             total_cells = len(rows) * len(columns)
             missing_cells = sum(_is_missing(row.get(column)) for row in rows for column in columns)
             group_results.append({
@@ -445,50 +575,98 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
                 "share": len(rows) / len(sample_rows) if sample_rows else 0.0,
                 "missing_rate": missing_cells / total_cells if total_cells else 0.0,
             })
-        population_comparison.append({"column": population_column, "groups": group_results})
+
+        references = []
+        psi_columns = [
+            column for column in columns
+            if column != population_column
+            and semantic_types.get(column, "categorical") not in {"identifier", "text", "ignore", "datetime"}
+        ]
+        for reference_value, reference_rows in ordered_groups:
+            comparisons = []
+            for comparison_value, comparison_rows in ordered_groups:
+                if comparison_value == reference_value:
+                    continue
+                variable_results = []
+                for column in psi_columns:
+                    semantic = semantic_types.get(column, "categorical")
+                    if semantic in {"continuous", "ordinal"}:
+                        psi, distribution = _numeric_population_distribution(
+                            reference_rows, comparison_rows, column
+                        )
+                    else:
+                        psi, distribution = _categorical_population_distribution(
+                            reference_rows, comparison_rows, column
+                        )
+                    variable_results.append({
+                        "column": column,
+                        "semantic_type": semantic,
+                        "psi": psi,
+                        "distribution": distribution,
+                    })
+                variable_results.sort(key=lambda item: item["psi"], reverse=True)
+                comparisons.append({
+                    "comparison": comparison_value,
+                    "variables": variable_results,
+                })
+            references.append({
+                "reference": reference_value,
+                "comparisons": comparisons,
+            })
+
+        population_comparison.append({
+            "column": population_column,
+            "groups": group_results,
+            "references": references,
+        })
 
     time_analysis: dict[str, Any] | None = None
     if time_column and time_column in columns:
-        buckets: dict[str, list[dict[str, str]]] = defaultdict(list)
-        for row in sample_rows:
-            parsed = _to_datetime(row.get(time_column))
-            if parsed:
-                buckets[_time_bucket(parsed, time_granularity)].append(row)
-
-        bucket_rows = []
-        continuous_columns = [
+        parsed_rows = [
+            (parsed, row)
+            for row in sample_rows
+            if (parsed := _to_datetime(row.get(time_column))) is not None
+        ]
+        numeric_columns = [
             column for column in columns
             if semantic_types.get(column) in {"continuous", "ordinal"} and column != time_column
-        ][:8]
-        for bucket, rows in sorted(buckets.items()):
-            total_cells = len(rows) * len(columns)
-            missing_cells = sum(_is_missing(row.get(column)) for row in rows for column in columns)
-            variable_stats = {}
-            for column in continuous_columns:
-                values = [number for row in rows if (number := _to_float(row.get(column))) is not None]
-                if values:
+        ]
+
+        granularities: dict[str, list[dict[str, Any]]] = {}
+        for granularity in ("daily", "weekly", "monthly", "quarterly", "yearly"):
+            buckets: dict[str, list[dict[str, str]]] = defaultdict(list)
+            for parsed, row in parsed_rows:
+                buckets[_time_bucket(parsed, granularity)].append(row)
+
+            bucket_rows = []
+            for bucket, rows in sorted(buckets.items()):
+                total_cells = len(rows) * len(columns)
+                missing_cells = sum(_is_missing(row.get(column)) for row in rows for column in columns)
+                variable_stats = {}
+                for column in numeric_columns:
+                    values = [
+                        number for row in rows
+                        if (number := _to_float(row.get(column))) is not None
+                    ]
                     variable_stats[column] = {
-                        "mean": statistics.fmean(values),
-                        "median": statistics.median(values),
-                        "p25": _quantile(values, 0.25),
-                        "p75": _quantile(values, 0.75),
+                        "min": min(values) if values else None,
+                        "max": max(values) if values else None,
+                        "mean": statistics.fmean(values) if values else None,
+                        "median": statistics.median(values) if values else None,
                         "missing_rate": sum(_is_missing(row.get(column)) for row in rows) / len(rows),
                     }
-            column_missing_rates = {
-                column: sum(_is_missing(row.get(column)) for row in rows) / len(rows)
-                for column in columns
-            }
-            bucket_rows.append({
-                "bucket": bucket,
-                "observations": len(rows),
-                "missing_rate": missing_cells / total_cells if total_cells else 0.0,
-                "column_missing_rates": column_missing_rates,
-                "variables": variable_stats,
-            })
+                bucket_rows.append({
+                    "bucket": bucket,
+                    "observations": len(rows),
+                    "missing_rate": missing_cells / total_cells if total_cells else 0.0,
+                    "variables": variable_stats,
+                })
+            granularities[granularity] = bucket_rows
+
         time_analysis = {
             "time_column": time_column,
-            "granularity": time_granularity,
-            "buckets": bucket_rows,
+            "numeric_columns": numeric_columns,
+            "granularities": granularities,
         }
 
     missingness_diagnostics = []
