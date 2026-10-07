@@ -93,6 +93,7 @@ type EdaResult = {
       bucket: string
       observations: number
       missing_rate: number
+      column_missing_rates: Record<string, number>
       variables: Record<string, { mean: number; median: number; p25: number | null; p75: number | null; missing_rate: number }>
     }[]
   }
@@ -307,6 +308,7 @@ function App() {
   const [edaTab, setEdaTab] = useState<EdaTab>('Overview')
   const [edaColumn, setEdaColumn] = useState<string>('')
   const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
+  const [edaTimeMissingColumn, setEdaTimeMissingColumn] = useState<string>('')
   const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
 
   useEffect(() => {
@@ -344,6 +346,7 @@ function App() {
     setEdaTab('Overview')
     setEdaColumn('')
     setEdaTimeVariable('')
+    setEdaTimeMissingColumn('')
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -445,6 +448,7 @@ function App() {
       setEdaResult(result)
       setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
       setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
+      setEdaTimeMissingColumn((current) => current || result.profiles.find((profile) => profile.missing_count > 0)?.column || result.profiles[0]?.column || '')
       setAnalysisStatus((current) => ({ ...current, EDA: 'ready' }))
       setLastRun((current) => ({ ...current, EDA: new Date().toLocaleString() }))
     } catch (err) {
@@ -786,6 +790,11 @@ function App() {
                       <article className="eda-chart-panel"><h3>Observation volume</h3><MiniLineChart data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.observations }))} /></article>
                       <article className="eda-chart-panel"><h3>Missing cells over time</h3><MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: bucket.missing_rate * 100 }))} /></article>
                     </div>
+                    <div className="eda-control-row variable-time-control">
+                      <div><h3>Column missingness over time</h3><p className="eda-muted">Track whether data quality changes for a specific variable.</p></div>
+                      <label className="form-field compact-field"><span>Column</span><select value={edaTimeMissingColumn} onChange={(e) => setEdaTimeMissingColumn(e.target.value)}>{edaResult.profiles.map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
+                    </div>
+                    {edaTimeMissingColumn && <MiniLineChart valueSuffix="%" data={edaResult.time_analysis.buckets.map((bucket) => ({ label: bucket.bucket, value: (bucket.column_missing_rates[edaTimeMissingColumn] ?? 0) * 100 }))} />}
                     <div className="eda-control-row variable-time-control">
                       <div><h3>Variable behaviour over time</h3><p className="eda-muted">Median trend for continuous / ordinal variables.</p></div>
                       <label className="form-field compact-field"><span>Variable</span><select value={edaTimeVariable} onChange={(e) => setEdaTimeVariable(e.target.value)}>{edaResult.profiles.filter((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type)).map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
