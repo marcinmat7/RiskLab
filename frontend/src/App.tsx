@@ -541,6 +541,11 @@ function App() {
   const [discriminationGranularity, setDiscriminationGranularity] = useState<TimeGranularity>('monthly')
   const [discriminationSegmentKey, setDiscriminationSegmentKey] = useState('')
   const [discriminationTimeSegmentKey, setDiscriminationTimeSegmentKey] = useState('overall')
+  const [calibrationResult, setCalibrationResult] = useState<CalibrationResult | null>(null)
+  const [calibrationError, setCalibrationError] = useState<string | null>(null)
+  const [calibrationSegmentKey, setCalibrationSegmentKey] = useState('')
+  const [calibrationGranularity, setCalibrationGranularity] = useState<TimeGranularity>('monthly')
+  const [calibrationTimeSegmentKey, setCalibrationTimeSegmentKey] = useState('overall')
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
 
   useEffect(() => {
@@ -594,6 +599,11 @@ function App() {
     setDiscriminationGranularity('monthly')
     setDiscriminationSegmentKey('')
     setDiscriminationTimeSegmentKey('overall')
+    setCalibrationResult(null)
+    setCalibrationError(null)
+    setCalibrationSegmentKey('')
+    setCalibrationGranularity('monthly')
+    setCalibrationTimeSegmentKey('overall')
     setValidationConfigMessage(null)
   }
 
@@ -604,6 +614,10 @@ function App() {
     setEdaError(null)
     setDiscriminationResult(null)
     setDiscriminationError(null)
+    setCalibrationResult(null)
+    setCalibrationError(null)
+    setCalibrationSegmentKey('')
+    setCalibrationTimeSegmentKey('overall')
     setEdaTab('Overview')
     setEdaColumn('')
     setPopulationColumn('')
