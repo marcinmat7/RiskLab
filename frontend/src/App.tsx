@@ -278,6 +278,60 @@ type CalibrationResult = {
   }
 }
 
+type StabilityVariable = {
+  column: string
+  semantic_type: SemanticType
+  psi: number
+  reference_mean: number | null
+  comparison_mean: number | null
+  reference_missing_rate: number
+  comparison_missing_rate: number
+  missing_delta: number
+  distribution: {
+    label: string
+    reference_share: number
+    comparison_share: number
+  }[]
+}
+
+type StabilityResult = {
+  sources: {
+    key: string
+    name: string
+    groups: { value: string; observations: number }[]
+  }[]
+  comparisons: {
+    source_key: string
+    source_name: string
+    reference: string
+    comparison: string
+    reference_observations: number
+    comparison_observations: number
+    variables: StabilityVariable[]
+  }[]
+  variables: {
+    column: string
+    semantic_type: SemanticType
+  }[]
+  time_analysis: null | {
+    time_column: string
+    granularities: Record<TimeGranularity, {
+      bucket: string
+      observations: number
+      references: {
+        source_key: string
+        reference: string
+        variables: { column: string; psi: number }[]
+      }[]
+    }[]>
+  }
+  thresholds: {
+    moderate: number
+    high: number
+    note: string
+  }
+}
+
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 
@@ -546,6 +600,13 @@ function App() {
   const [calibrationSegmentKey, setCalibrationSegmentKey] = useState('')
   const [calibrationGranularity, setCalibrationGranularity] = useState<TimeGranularity>('monthly')
   const [calibrationTimeSegmentKey, setCalibrationTimeSegmentKey] = useState('overall')
+  const [stabilityResult, setStabilityResult] = useState<StabilityResult | null>(null)
+  const [stabilityError, setStabilityError] = useState<string | null>(null)
+  const [stabilitySourceKey, setStabilitySourceKey] = useState('')
+  const [stabilityReference, setStabilityReference] = useState('')
+  const [stabilityComparison, setStabilityComparison] = useState('')
+  const [stabilityVariable, setStabilityVariable] = useState('')
+  const [stabilityGranularity, setStabilityGranularity] = useState<TimeGranularity>('monthly')
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
 
   useEffect(() => {
@@ -604,6 +665,13 @@ function App() {
     setCalibrationSegmentKey('')
     setCalibrationGranularity('monthly')
     setCalibrationTimeSegmentKey('overall')
+    setStabilityResult(null)
+    setStabilityError(null)
+    setStabilitySourceKey('')
+    setStabilityReference('')
+    setStabilityComparison('')
+    setStabilityVariable('')
+    setStabilityGranularity('monthly')
     setValidationConfigMessage(null)
   }
 
@@ -618,6 +686,12 @@ function App() {
     setCalibrationError(null)
     setCalibrationSegmentKey('')
     setCalibrationTimeSegmentKey('overall')
+    setStabilityResult(null)
+    setStabilityError(null)
+    setStabilitySourceKey('')
+    setStabilityReference('')
+    setStabilityComparison('')
+    setStabilityVariable('')
     setEdaTab('Overview')
     setEdaColumn('')
     setPopulationColumn('')
@@ -910,6 +984,42 @@ function App() {
     } catch (err) {
       setCalibrationError(err instanceof Error ? err.message : 'Calibration analysis failed.')
       setAnalysisStatus((current) => ({ ...current, Calibration: 'failed' }))
+    }
+  }
+
+  const runStability = async () => {
+    if (!selectedFile || !validationReady) return
+    setAnalysisStatus((current) => ({ ...current, Stability: 'running' }))
+    setStabilityError(null)
+
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+    formData.append('config', JSON.stringify(validationConfig))
+
+    try {
+      const response = await fetch('http://localhost:8000/stability/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as StabilityResult
+      setStabilityResult(result)
+
+      const firstSource = result.sources[0]
+      const firstReference = firstSource?.groups[0]?.value ?? ''
+      const firstComparison = firstSource?.groups.find((group) => group.value !== firstReference)?.value ?? ''
+      setStabilitySourceKey(firstSource?.key ?? '')
+      setStabilityReference(firstReference)
+      setStabilityComparison(firstComparison)
+      setStabilityVariable(result.comparisons.find((item) =>
+        item.source_key === firstSource?.key &&
+        item.reference === firstReference &&
+        item.comparison === firstComparison
+      )?.variables[0]?.column ?? result.variables[0]?.column ?? '')
+
+      setAnalysisStatus((current) => ({ ...current, Stability: 'ready' }))
+      setLastRun((current) => ({ ...current, Stability: new Date().toLocaleString() }))
+    } catch (err) {
+      setStabilityError(err instanceof Error ? err.message : 'Stability analysis failed.')
+      setAnalysisStatus((current) => ({ ...current, Stability: 'failed' }))
     }
   }
 
@@ -2081,7 +2191,246 @@ function App() {
     )
   }
 
-  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA' | 'Discrimination' | 'Calibration'>) => {
+  const renderStability = () => {
+    if (!preview) return <EmptyAnalysisState section="Stability" onOpenData={() => setActiveSection('Data')} />
+
+    const status = analysisStatus.Stability
+    if (!validationReady) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Stability</p><h1>Stability</h1><p>Assess population and model-output drift between reference and comparison populations.</p></div>
+            <div className="analysis-status-pill blocked"><span />Blocked</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>≈</span></div>
+            <h2>Complete validation first</h2>
+            <p>Stability uses the configured population columns, features, model output and optional time cut-off.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (!stabilityResult) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Stability</p><h1>Stability</h1><p>PSI, distribution shift and volume stability across populations and time.</p></div>
+            <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+          </div>
+          {stabilityError && <div className="message error-message">{stabilityError}</div>}
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>≈</span></div>
+            <h2>{status === 'running' ? 'Stability analysis is running…' : 'Ready to assess stability'}</h2>
+            <p>RiskLab compares the model output and configured features between population groups. The optional time cut-off can also act as a reference/comparison definition.</p>
+            <button className="primary-button" disabled={status === 'running'} onClick={runStability}>{status === 'running' ? 'Running…' : 'Run stability analysis'}</button>
+          </section>
+        </section>
+      )
+    }
+
+    const result = stabilityResult
+    const selectedSource = result.sources.find((source) => source.key === stabilitySourceKey) ?? result.sources[0]
+
+    if (!selectedSource) {
+      return (
+        <section className="page-content stability-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Stability</p><h1>Stability</h1><p>PSI, distribution shift and volume stability across populations and time.</p></div>
+            <div className="eda-header-actions"><div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div><button className="primary-button" onClick={runStability}>Run again</button></div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>≈</span></div>
+            <h2>Configure a comparison population</h2>
+            <p>Select a Sample / population column with at least two groups in Validation, or enable “Treat cut-off as an analysis segment”.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    const sourceGroups = selectedSource.groups
+    const resolvedReference = sourceGroups.some((group) => group.value === stabilityReference) ? stabilityReference : sourceGroups[0]?.value ?? ''
+    const resolvedComparison = sourceGroups.some((group) => group.value === stabilityComparison && group.value !== resolvedReference)
+      ? stabilityComparison
+      : sourceGroups.find((group) => group.value !== resolvedReference)?.value ?? ''
+
+    const activeComparison = result.comparisons.find((item) =>
+      item.source_key === selectedSource.key &&
+      item.reference === resolvedReference &&
+      item.comparison === resolvedComparison
+    )
+
+    const activeVariable = activeComparison?.variables.find((variable) => variable.column === stabilityVariable)
+      ?? activeComparison?.variables[0]
+
+    const psiTone = (psi: number) => psi > result.thresholds.high ? 'bad' : psi >= result.thresholds.moderate ? 'warn' : 'neutral'
+    const psiStatus = (psi: number) => psi > result.thresholds.high ? 'High shift' : psi >= result.thresholds.moderate ? 'Moderate shift' : 'Low shift'
+
+    const distributionOption: echarts.EChartsOption | null = activeVariable ? {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 44, bottom: 92 },
+      xAxis: { type: 'category', data: activeVariable.distribution.map((row) => row.label), axisLabel: { color: '#71809a', rotate: 30, interval: 0, hideOverlap: true } },
+      yAxis: { type: 'value', min: 0, name: 'Share', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      series: [
+        { name: resolvedReference, type: 'bar', data: activeVariable.distribution.map((row) => row.reference_share), itemStyle: { color: '#4f8cff' }, barMaxWidth: 34 },
+        { name: resolvedComparison, type: 'bar', data: activeVariable.distribution.map((row) => row.comparison_share), itemStyle: { color: '#8b99ad' }, barMaxWidth: 34 },
+      ],
+    } : null
+
+    const timeBuckets = result.time_analysis?.granularities[stabilityGranularity] ?? []
+    const psiTimeValues = timeBuckets.map((bucket) => {
+      const reference = bucket.references.find((item) => item.source_key === selectedSource.key && item.reference === resolvedReference)
+      return reference?.variables.find((item) => item.column === activeVariable?.column)?.psi ?? null
+    })
+    const cutoffBucket = timeBucketForDate(validationConfig.timeCutoffDate, stabilityGranularity)
+    const cutoffMarkLine = validationConfig.timeCutoffDate && cutoffBucket ? {
+      silent: true,
+      symbol: 'none',
+      label: { formatter: `Cut-off · ${validationConfig.timeCutoffDate}`, color: '#9aa9bd', position: 'insideEndTop' as const },
+      lineStyle: { type: 'dashed' as const, width: 1, color: '#9aa9bd' },
+      data: [{ xAxis: cutoffBucket }],
+    } : undefined
+
+    const psiTimeOption: echarts.EChartsOption | null = result.time_analysis && activeVariable ? {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      grid: { left: 58, right: 22, top: 34, bottom: 64 },
+      xAxis: { type: 'category', data: timeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, name: 'PSI', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 12, height: 18 }],
+      series: [{
+        name: activeVariable.column,
+        type: 'line',
+        showSymbol: true,
+        data: psiTimeValues,
+        lineStyle: { width: 2, color: '#4f8cff' },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          label: { color: '#91a0b7' },
+          lineStyle: { type: 'dashed', width: 1 },
+          data: [
+            { yAxis: result.thresholds.moderate, label: { formatter: '0.10 · moderate' }, lineStyle: { color: '#d99a3e' } },
+            { yAxis: result.thresholds.high, label: { formatter: '0.25 · high' }, lineStyle: { color: '#e56f6f' } },
+            ...(cutoffMarkLine ? cutoffMarkLine.data : []),
+          ],
+        },
+      }],
+    } : null
+
+    const volumeOption: echarts.EChartsOption | null = result.time_analysis ? {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      grid: { left: 64, right: 22, top: 34, bottom: 64 },
+      xAxis: { type: 'category', data: timeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, name: 'Observations', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 12, height: 18 }],
+      series: [{
+        name: 'Observations',
+        type: 'line',
+        showSymbol: true,
+        areaStyle: { opacity: .08, color: '#8b99ad' },
+        data: timeBuckets.map((bucket) => bucket.observations),
+        lineStyle: { width: 2, color: '#8b99ad' },
+        markLine: cutoffMarkLine,
+      }],
+    } : null
+
+    const changeSource = (key: string) => {
+      const source = result.sources.find((item) => item.key === key)
+      const reference = source?.groups[0]?.value ?? ''
+      const comparison = source?.groups.find((group) => group.value !== reference)?.value ?? ''
+      const firstVariable = result.comparisons.find((item) => item.source_key === key && item.reference === reference && item.comparison === comparison)?.variables[0]?.column ?? result.variables[0]?.column ?? ''
+      setStabilitySourceKey(key)
+      setStabilityReference(reference)
+      setStabilityComparison(comparison)
+      setStabilityVariable(firstVariable)
+    }
+
+    const changeReference = (reference: string) => {
+      const comparison = sourceGroups.find((group) => group.value !== reference)?.value ?? ''
+      const firstVariable = result.comparisons.find((item) => item.source_key === selectedSource.key && item.reference === reference && item.comparison === comparison)?.variables[0]?.column ?? result.variables[0]?.column ?? ''
+      setStabilityReference(reference)
+      setStabilityComparison(comparison)
+      setStabilityVariable(firstVariable)
+    }
+
+    return (
+      <section className="page-content stability-page">
+        <div className="analysis-page-header">
+          <div><p className="eyebrow">Stability</p><h1>Stability</h1><p>Compare population distributions and model output between a fixed reference and comparison population.</p></div>
+          <div className="eda-header-actions"><div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div><button className="primary-button" disabled={status === 'running'} onClick={runStability}>{status === 'running' ? 'Running…' : 'Run again'}</button></div>
+        </div>
+        {stabilityError && <div className="message error-message">{stabilityError}</div>}
+
+        <section className="panel stability-controls">
+          <div className="eda-control-row">
+            <div><h2>Population comparison</h2><p>Select one reference population and one comparison population. All PSI values below use the same definition.</p></div>
+            <div className="stability-selector-grid">
+              <label className="form-field compact-field"><span>Population definition</span><select value={selectedSource.key} onChange={(e) => changeSource(e.target.value)}>{result.sources.map((source) => <option key={source.key} value={source.key}>{source.name}</option>)}</select></label>
+              <label className="form-field compact-field"><span>Reference</span><select value={resolvedReference} onChange={(e) => changeReference(e.target.value)}>{sourceGroups.map((group) => <option key={group.value} value={group.value}>{group.value} · n={group.observations.toLocaleString()}</option>)}</select></label>
+              <label className="form-field compact-field"><span>Comparison</span><select value={resolvedComparison} onChange={(e) => setStabilityComparison(e.target.value)}>{sourceGroups.filter((group) => group.value !== resolvedReference).map((group) => <option key={group.value} value={group.value}>{group.value} · n={group.observations.toLocaleString()}</option>)}</select></label>
+            </div>
+          </div>
+        </section>
+
+        {activeComparison && (
+          <>
+            <section className="panel stability-summary-section">
+              <div className="panel-title"><div><h2>PSI summary</h2><p className="eda-muted">Default thresholds are heuristic: PSI &lt; 0.10 low, 0.10–0.25 moderate, &gt; 0.25 high.</p></div></div>
+              <div className="table-wrap">
+                <table className="stability-summary-table">
+                  <thead><tr><th>Variable</th><th>PSI</th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
+                  <tbody>{activeComparison.variables.map((variable) => (
+                    <tr key={variable.column} className={activeVariable?.column === variable.column ? 'selected-row' : ''} onClick={() => setStabilityVariable(variable.column)}>
+                      <td><strong>{variable.column}</strong><small>{variable.semantic_type}</small></td>
+                      <td>{variable.psi.toFixed(3)}</td>
+                      <td>{formatMetric(variable.reference_mean)}</td>
+                      <td>{formatMetric(variable.comparison_mean)}</td>
+                      <td>{variable.missing_delta >= 0 ? '+' : ''}{(variable.missing_delta * 100).toFixed(1)} pp</td>
+                      <td><span className={`stability-badge ${psiTone(variable.psi)}`}>{psiStatus(variable.psi)}</span></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              <div className="eda-sample-note">{result.thresholds.note} Click a variable row to inspect its distribution.</div>
+            </section>
+
+            {activeVariable && distributionOption && (
+              <section className="panel stability-drilldown">
+                <div className="eda-control-row">
+                  <div><h2>{activeVariable.column} distribution</h2><p>Reference-bin distribution is reused for the comparison population. Missing values are a dedicated bucket.</p></div>
+                  <label className="form-field compact-field"><span>Variable</span><select value={activeVariable.column} onChange={(e) => setStabilityVariable(e.target.value)}>{activeComparison.variables.map((variable) => <option key={variable.column} value={variable.column}>{variable.column} · PSI {variable.psi.toFixed(3)}</option>)}</select></label>
+                </div>
+                <EChart option={distributionOption} height={430} />
+              </section>
+            )}
+
+            {result.time_analysis && psiTimeOption && volumeOption && (
+              <section className="panel stability-time-section">
+                <div className="eda-control-row">
+                  <div><h2>Stability over time</h2><p>Each time bucket is compared with the selected fixed reference population. Volume is shown alongside PSI for context.</p></div>
+                  <label className="form-field compact-field"><span>Aggregation</span><select value={stabilityGranularity} onChange={(e) => setStabilityGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>No rerun required.</small></label>
+                </div>
+                <div className="stability-time-grid">
+                  <article className="eda-chart-panel"><h4>PSI over time · {activeVariable?.column}</h4><EChart option={psiTimeOption} height={360} /></article>
+                  <article className="eda-chart-panel"><h4>Population volume</h4><EChart option={volumeOption} height={360} /></article>
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        <div className="eda-footer-meta">Last run: {lastRun.Stability ?? '—'}</div>
+      </section>
+    )
+  }
+
+  const renderAnalysisPage = (section: Exclude<AnalysisSection, 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability'>) => {
     if (!preview) return <EmptyAnalysisState section={section} onOpenData={() => setActiveSection('Data')} />
 
     const status = analysisStatus[section]
@@ -2150,7 +2499,8 @@ function App() {
         {activeSection === 'EDA' && renderEda()}
         {activeSection === 'Discrimination' && renderDiscrimination()}
         {activeSection === 'Calibration' && renderCalibration()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && renderAnalysisPage(activeSection)}
+        {activeSection === 'Stability' && renderStability()}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
