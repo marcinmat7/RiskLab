@@ -223,6 +223,61 @@ type DiscriminationResult = {
   }
 }
 
+type CalibrationSummary = {
+  observations: number
+  defaults: number
+  default_rate: number
+  mean_pd: number
+  expected_defaults: number
+  oe_ratio: number | null
+  brier_score: number | null
+  spiegelhalter_z: number | null
+  spiegelhalter_p_value: number | null
+}
+
+type CalibrationResult = {
+  overall: CalibrationSummary & {
+    calibration_bins: {
+      bin: number
+      observations: number
+      defaults: number
+      mean_pd: number
+      observed_default_rate: number
+      ci_lower: number | null
+      ci_upper: number | null
+    }[]
+  }
+  segment_dimensions: {
+    column: string
+    display_name: string
+    semantic_type: SemanticType
+    mode: 'quantiles' | 'categories'
+    bins: string[]
+  }[]
+  segment_performance: {
+    key: string
+    name: string
+    columns: string[]
+    groups: ({ value: string } & CalibrationSummary)[]
+  }[]
+  time_performance: null | {
+    time_column: string
+    granularities: Record<TimeGranularity, {
+      overall: ({ bucket: string } & CalibrationSummary)[]
+      segments: {
+        key: string
+        name: string
+        groups: { value: string; buckets: ({ bucket: string } & CalibrationSummary)[] }[]
+      }[]
+    }>
+  }
+  excluded: {
+    missing_prediction: number
+    missing_target: number
+    invalid_pd: number
+  }
+}
+
 const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 
