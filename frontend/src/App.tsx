@@ -683,6 +683,143 @@ function App() {
     const populationEnabled = validationConfig.populationColumns.length > 0
     const timeEnabled = Boolean(validationConfig.timeColumn)
 
+    const sortedProfiles = [...edaResult.profiles].sort((a, b) => {
+      const direction = qualitySortDirection === 'asc' ? 1 : -1
+      const qualityRank = (profile: EdaProfile) => profile.missing_rate > .2 ? 2 : profile.missing_rate > .05 ? 1 : 0
+      let comparison = 0
+      if (qualitySort === 'column') comparison = a.column.localeCompare(b.column)
+      if (qualitySort === 'semantic') comparison = a.semantic_type.localeCompare(b.semantic_type)
+      if (qualitySort === 'missing') comparison = a.missing_rate - b.missing_rate
+      if (qualitySort === 'unique') comparison = (a.unique_count ?? Number.MAX_SAFE_INTEGER) - (b.unique_count ?? Number.MAX_SAFE_INTEGER)
+      if (qualitySort === 'quality') comparison = qualityRank(a) - qualityRank(b)
+      return comparison * direction
+    })
+
+    const changeQualitySort = (column: typeof qualitySort) => {
+      if (qualitySort === column) setQualitySortDirection((current) => current === 'asc' ? 'desc' : 'asc')
+      else {
+        setQualitySort(column)
+        setQualitySortDirection(column === 'column' || column === 'semantic' ? 'asc' : 'desc')
+      }
+    }
+
+    const histogramOption = (profile: EdaProfile, logarithmic: boolean): echarts.EChartsOption => {
+      const base = profile.numeric_summary
+        ? profile.numeric_summary.histogram.map((item) => ({ label: item.label, count: item.count, missing: false }))
+        : (profile.categories ?? []).map((item) => ({ label: item.value, count: item.count, missing: false }))
+      const rows = [...base, { label: 'Missing', count: profile.missing_count, missing: true }]
+      return {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        grid: { left: 54, right: 18, top: 28, bottom: profile.categories ? 86 : 62 },
+        xAxis: {
+          type: 'category',
+          data: rows.map((item) => item.label),
+          axisLabel: { color: '#71809a', rotate: profile.categories ? 35 : 20, interval: 0, hideOverlap: true },
+          axisLine: { lineStyle: { color: '#263650' } },
+        },
+        yAxis: {
+          type: logarithmic ? 'log' : 'value',
+          min: logarithmic ? 1 : 0,
+          name: logarithmic ? 'Count (log)' : 'Count',
+          nameTextStyle: { color: '#71809a' },
+          axisLabel: { color: '#71809a' },
+          splitLine: { lineStyle: { color: '#1b293d' } },
+        },
+        series: [{
+          type: 'bar',
+          data: rows.map((item) => ({
+            value: logarithmic && item.count === 0 ? null : item.count,
+            itemStyle: { color: item.missing ? '#7b879a' : '#4f8cff' },
+          })),
+          barMaxWidth: 38,
+        }],
+      }
+    }
+
+    const cdfOption = (profile: EdaProfile): echarts.EChartsOption => ({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: unknown) => {
+          const point = Array.isArray(params) ? params[0] as { data?: [number, number] } : undefined
+          return point?.data ? 'Value: ' + formatMetric(point.data[0]) + '<br/>CDF: ' + (point.data[1] * 100).toFixed(1) + '%' : ''
+        },
+      },
+      grid: { left: 58, right: 20, top: 28, bottom: 48 },
+      xAxis: { type: 'value', name: profile.column, nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'CDF', nameTextStyle: { color: '#71809a' }, axisLabel: { color: '#71809a', formatter: (value: number) => Math.round(value * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      series: [{
+        type: 'line',
+        showSymbol: false,
+        smooth: false,
+        data: profile.numeric_summary?.cdf.map((point) => [point.x, point.cdf]) ?? [],
+        lineStyle: { width: 2, color: '#6ea8ff' },
+      }],
+    })
+
+    const relationshipLookup = new Map(
+      edaResult.relationships.flatMap((item) => [
+        [item.left + '|||' + item.right, item] as const,
+        [item.right + '|||' + item.left, item] as const,
+      ])
+    )
+    const numericRelationshipColumns = edaResult.relationship_columns.filter((column) => ['continuous', 'ordinal'].includes(validationConfig.semanticTypes[column] ?? 'categorical'))
+    const relationshipBaseColumns = relationshipMode === 'numeric' ? numericRelationshipColumns : edaResult.relationship_columns
+    const searchedRelationshipColumns = relationshipBaseColumns.filter((column) => column.toLowerCase().includes(relationshipSearch.trim().toLowerCase()))
+    const rankedRelationshipColumns = [...searchedRelationshipColumns].sort((a, b) => {
+      const maxFor = (column: string) => Math.max(0, ...edaResult.relationships.filter((item) => item.left === column || item.right === column).map((item) => Math.abs(item.score)))
+      return maxFor(b) - maxFor(a)
+    })
+    const focusedRelationshipColumns = relationshipFocus && relationshipBaseColumns.includes(relationshipFocus)
+      ? [relationshipFocus, ...rankedRelationshipColumns.filter((column) => column !== relationshipFocus).slice(0, 29)]
+      : rankedRelationshipColumns.slice(0, 30)
+
+    const heatmapOption = (mode: 'numeric' | 'mixed'): echarts.EChartsOption => {
+      const columns = focusedRelationshipColumns
+      const data: [number, number, number][] = []
+      columns.forEach((left, y) => {
+        columns.forEach((right, x) => {
+          if (left === right) {
+            data.push([x, y, 1])
+            return
+          }
+          const item = relationshipLookup.get(left + '|||' + right)
+          if (!item) return
+          if (mode === 'numeric' && item.kind !== 'Pearson correlation') return
+          const score = mode === 'numeric' ? item.score : (item.kind === 'Pearson correlation' ? Math.abs(item.score) : item.score)
+          data.push([x, y, score])
+        })
+      })
+
+      return {
+        backgroundColor: 'transparent',
+        tooltip: {
+          formatter: (params: unknown) => {
+            const point = params as { data?: [number, number, number] }
+            if (!point.data) return ''
+            return columns[point.data[1]] + ' ↔ ' + columns[point.data[0]] + '<br/><strong>' + point.data[2].toFixed(3) + '</strong>'
+          },
+        },
+        grid: { left: 140, right: 38, top: 34, bottom: 120 },
+        xAxis: { type: 'category', data: columns, axisLabel: { color: '#71809a', rotate: 45, interval: 0 }, splitArea: { show: true } },
+        yAxis: { type: 'category', data: columns, axisLabel: { color: '#71809a', interval: 0 }, splitArea: { show: true } },
+        visualMap: {
+          min: mode === 'numeric' ? -1 : 0,
+          max: 1,
+          calculable: true,
+          orient: 'horizontal',
+          left: 'center',
+          bottom: 8,
+          textStyle: { color: '#8b9aaf' },
+          inRange: mode === 'numeric'
+            ? { color: ['#ef6b73', '#17243a', '#4f8cff'] }
+            : { color: ['#101827', '#275eaf', '#78adff'] },
+        },
+        series: [{ type: 'heatmap', data, emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,.45)' } } }],
+      }
+    }
+
     const renderLocked = (kind: 'population' | 'time') => (
       <section className="panel eda-locked-card">
         <div className="analysis-run-icon" aria-hidden="true"><span>🔒</span></div>
