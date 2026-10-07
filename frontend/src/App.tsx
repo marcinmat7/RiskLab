@@ -133,55 +133,67 @@ type EdaResult = {
 
 
 type DiscriminationPoint = { fpr: number; tpr: number; threshold: number }
-type DiscriminationRankRow = {
-  bin: number
-  observations: number
-  defaults: number
-  default_rate: number
-  mean_prediction: number
-  min_prediction: number
-  max_prediction: number
-  cumulative_population: number
-  cumulative_bad_capture: number
-}
 type DiscriminationMetrics = {
   observations: number
   defaults: number
   default_rate: number
-  auc: number
-  gini: number
-  ks: number
-  bad_capture_10: number
+  auc: number | null
+  gini: number | null
+  ks: number | null
+  bad_capture_10: number | null
   roc: DiscriminationPoint[]
-  rank_table: DiscriminationRankRow[]
+  cap: { population: number; bad_capture: number }[]
+}
+type DiscriminationSegment = {
+  key: string
+  name: string
+  columns: string[]
+  groups: {
+    value: string
+    observations: number
+    defaults: number
+    default_rate: number
+    auc: number | null
+    gini: number | null
+    ks: number | null
+    bad_capture_10: number | null
+    roc: DiscriminationPoint[]
+    cap: { population: number; bad_capture: number }[]
+  }[]
+}
+type DiscriminationTimeBucket = {
+  bucket: string
+  observations: number
+  defaults: number
+  default_rate: number
+  auc: number | null
+  gini: number | null
+  ks: number | null
+  bad_capture_10: number | null
+  roc: DiscriminationPoint[]
   cap: { population: number; bad_capture: number }[]
 }
 type DiscriminationResult = {
   overall: DiscriminationMetrics
-  population_performance: {
+  segment_dimensions: {
     column: string
-    groups: {
-      value: string
-      observations: number
-      defaults: number
-      default_rate: number
-      auc: number | null
-      gini: number | null
-      ks: number | null
-    }[]
+    semantic_type: SemanticType
+    mode: 'quantiles' | 'categories'
+    bins: string[]
+    edges?: number[]
   }[]
+  segment_performance: DiscriminationSegment[]
   time_performance: null | {
     time_column: string
-    granularity: TimeGranularity
-    buckets: {
-      bucket: string
-      observations: number
-      defaults: number
-      default_rate: number
-      auc: number | null
-      gini: number | null
-      ks: number | null
-    }[]
+    granularities: Record<TimeGranularity, {
+      overall: DiscriminationTimeBucket[]
+      segments: {
+        key: string
+        name: string
+        columns: string[]
+        groups: { value: string; buckets: DiscriminationTimeBucket[] }[]
+      }[]
+    }>
   }
   excluded: { missing_prediction: number; missing_target: number }
   direction: string
@@ -424,6 +436,8 @@ function App() {
   const [discriminationResult, setDiscriminationResult] = useState<DiscriminationResult | null>(null)
   const [discriminationError, setDiscriminationError] = useState<string | null>(null)
   const [discriminationGranularity, setDiscriminationGranularity] = useState<TimeGranularity>('monthly')
+  const [discriminationSegmentKey, setDiscriminationSegmentKey] = useState('')
+  const [discriminationTimeSegmentKey, setDiscriminationTimeSegmentKey] = useState('overall')
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -474,6 +488,8 @@ function App() {
     setDiscriminationResult(null)
     setDiscriminationError(null)
     setDiscriminationGranularity('monthly')
+    setDiscriminationSegmentKey('')
+    setDiscriminationTimeSegmentKey('overall')
   }
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -613,7 +629,10 @@ function App() {
       const response = await fetch('http://localhost:8000/discrimination/run', { method: 'POST', body: formData })
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
-      setDiscriminationResult(body as DiscriminationResult)
+      const result = body as DiscriminationResult
+      setDiscriminationResult(result)
+      setDiscriminationSegmentKey((current) => current || result.segment_performance[0]?.key || '')
+      setDiscriminationTimeSegmentKey('overall')
       setAnalysisStatus((current) => ({ ...current, Discrimination: 'ready' }))
       setLastRun((current) => ({ ...current, Discrimination: new Date().toLocaleString() }))
     } catch (err) {
@@ -1326,14 +1345,14 @@ function App() {
       return (
         <section className="page-content analysis-module-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">Discrimination</p><h1>Discrimination</h1><p>ROC AUC, Gini, KS, CAP / gains, rank ordering and conditional population / time views.</p></div>
+            <div><p className="eyebrow">Discrimination</p><h1>Discrimination</h1><p>ROC AUC, Gini, KS, CAP / gains, subgroup ROC curves and performance over time.</p></div>
             <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
           </div>
           {discriminationError && <div className="message error-message">{discriminationError}</div>}
           <section className="panel analysis-run-card">
             <div className="analysis-run-icon" aria-hidden="true"><span>↗</span></div>
             <h2>{status === 'running' ? 'Discrimination analysis is running…' : 'Ready to evaluate ranking performance'}</h2>
-            <p>RiskLab normalizes PD and score direction internally so higher values always represent higher risk.</p>
+            <p>Continuous segment variables are automatically split into three quantile groups. Configured population and sensitive variables can also be analysed as pairwise intersections.</p>
             <button className="primary-button" disabled={status === 'running'} onClick={runDiscrimination}>{status === 'running' ? 'Running…' : 'Run discrimination'}</button>
           </section>
         </section>
@@ -1380,18 +1399,60 @@ function App() {
       ],
     }
 
-    const timeOption: echarts.EChartsOption | null = result.time_performance ? {
+    const selectedSegment = result.segment_performance.find((segment) => segment.key === discriminationSegmentKey) ?? result.segment_performance[0]
+    const segmentRocOption = selectedSegment ? {
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
-      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
-      grid: { left: 58, right: 20, top: 42, bottom: 62 },
-      xAxis: { type: 'category', data: result.time_performance.buckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
-      yAxis: { type: 'value', min: 0, max: 1, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
-      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 12, height: 18 }],
+      legend: { type: 'scroll', top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 54, bottom: 48 },
+      xAxis: { type: 'value', min: 0, max: 1, name: 'False positive rate', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'True positive rate', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
       series: [
-        { name: 'AUC', type: 'line', showSymbol: true, data: result.time_performance.buckets.map((bucket) => bucket.auc), connectNulls: false, lineStyle: { color: '#4f8cff', width: 2 } },
-        { name: 'KS', type: 'line', showSymbol: true, data: result.time_performance.buckets.map((bucket) => bucket.ks), connectNulls: false, lineStyle: { color: '#69e7ad', width: 2 } },
+        ...selectedSegment.groups.filter((group) => group.roc.length).map((group) => ({
+          name: `${group.value} · AUC ${group.auc?.toFixed(3) ?? '—'}`,
+          type: 'line' as const,
+          showSymbol: false,
+          data: group.roc.map((point) => [point.fpr, point.tpr]),
+          lineStyle: { width: 2 },
+        })),
+        { name: 'Random', type: 'line' as const, showSymbol: false, data: [[0,0],[1,1]], lineStyle: { width: 1, type: 'dashed' as const, color: '#65758d' } },
       ],
+    } satisfies echarts.EChartsOption : null
+
+    const timeData = result.time_performance?.granularities[discriminationGranularity]
+    const selectedTimeSegment = discriminationTimeSegmentKey === 'overall'
+      ? null
+      : timeData?.segments.find((segment) => segment.key === discriminationTimeSegmentKey)
+    const timeCategories = timeData?.overall.map((bucket) => bucket.bucket) ?? []
+
+    const timeOption: echarts.EChartsOption | null = timeData ? {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      legend: { type: 'scroll', top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 58, right: 20, top: 54, bottom: 62 },
+      xAxis: { type: 'category', data: timeCategories, boundaryGap: false, axisLabel: { color: '#71809a' } },
+      yAxis: { type: 'value', min: 0, max: 1, name: 'ROC AUC', axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 12, height: 18 }],
+      series: discriminationTimeSegmentKey === 'overall'
+        ? [{
+            name: 'Overall AUC',
+            type: 'line',
+            showSymbol: true,
+            connectNulls: false,
+            data: timeData.overall.map((bucket) => bucket.auc),
+            lineStyle: { width: 2, color: '#4f8cff' },
+          }]
+        : (selectedTimeSegment?.groups.map((group) => {
+            const lookup = new Map(group.buckets.map((bucket) => [bucket.bucket, bucket.auc]))
+            return {
+              name: group.value,
+              type: 'line' as const,
+              showSymbol: true,
+              connectNulls: false,
+              data: timeCategories.map((bucket) => lookup.get(bucket) ?? null),
+              lineStyle: { width: 2 },
+            }
+          }) ?? []),
     } : null
 
     return (
@@ -1403,10 +1464,10 @@ function App() {
         {discriminationError && <div className="message error-message">{discriminationError}</div>}
 
         <div className="discrimination-kpis">
-          <article className="metric-card"><span>ROC AUC</span><strong>{result.overall.auc.toFixed(3)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
-          <article className="metric-card"><span>Gini</span><strong>{result.overall.gini.toFixed(3)}</strong><small className="neutral">2 × AUC − 1</small></article>
-          <article className="metric-card"><span>KS</span><strong>{result.overall.ks.toFixed(3)}</strong><small className="neutral">Max cumulative separation</small></article>
-          <article className="metric-card"><span>Bad capture @ 10%</span><strong>{formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
+          <article className="metric-card"><span>ROC AUC</span><strong>{formatMetric(result.overall.auc)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
+          <article className="metric-card"><span>Gini</span><strong>{formatMetric(result.overall.gini)}</strong><small className="neutral">2 × AUC − 1</small></article>
+          <article className="metric-card"><span>KS</span><strong>{formatMetric(result.overall.ks)}</strong><small className="neutral">Max cumulative separation</small></article>
+          <article className="metric-card"><span>Bad capture @ 10%</span><strong>{result.overall.bad_capture_10 === null ? '—' : formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
           <article className="metric-card"><span>Default rate</span><strong>{formatPercent(result.overall.default_rate)}</strong><small className="neutral">Positive class: {validationConfig.positiveClass}</small></article>
         </div>
 
@@ -1417,22 +1478,36 @@ function App() {
 
         <article className="panel discrimination-chart"><div className="panel-title"><div><h2>CAP / cumulative gains</h2><p className="eda-muted">Shows how quickly the riskiest observations capture observed defaults.</p></div></div><EChart option={capOption} height={390} /></article>
 
-        <section className="panel discrimination-section">
-          <div className="panel-title"><div><h2>Rank ordering</h2><p className="eda-muted">Decile 1 contains the highest-risk observations after score-direction normalization.</p></div></div>
-          <div className="table-wrap"><table><thead><tr><th>Decile</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean risk score</th><th>Cum. bad capture</th></tr></thead><tbody>{result.overall.rank_table.map((row) => <tr key={row.bin}><td>{row.bin}</td><td>{row.observations.toLocaleString()}</td><td>{row.defaults.toLocaleString()}</td><td>{formatPercent(row.default_rate)}</td><td>{formatMetric(row.mean_prediction)}</td><td>{formatPercent(row.cumulative_bad_capture)}</td></tr>)}</tbody></table></div>
-        </section>
-
-        {result.population_performance.map((population) => (
-          <section className="panel discrimination-section" key={population.column}>
-            <div className="panel-title"><div><h2>Performance by {population.column}</h2><p className="eda-muted">Groups with only one target class cannot produce AUC / Gini / KS.</p></div></div>
-            <div className="table-wrap"><table><thead><tr><th>Group</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>AUC</th><th>Gini</th><th>KS</th></tr></thead><tbody>{population.groups.map((group) => <tr key={group.value}><td>{group.value}</td><td>{group.observations.toLocaleString()}</td><td>{group.defaults.toLocaleString()}</td><td>{formatPercent(group.default_rate)}</td><td>{formatMetric(group.auc)}</td><td>{formatMetric(group.gini)}</td><td>{formatMetric(group.ks)}</td></tr>)}</tbody></table></div>
+        {result.segment_performance.length > 0 && (
+          <section className="panel discrimination-section segment-performance-section">
+            <div className="eda-control-row">
+              <div><h2>ROC by subgroup</h2><p>Compare discriminatory power across configured populations, sensitive attributes and pairwise intersections.</p></div>
+              <label className="form-field compact-field"><span>Segment view</span><select value={selectedSegment?.key ?? ''} onChange={(e) => setDiscriminationSegmentKey(e.target.value)}>{result.segment_performance.map((segment) => <option key={segment.key} value={segment.key}>{segment.name}</option>)}</select></label>
+            </div>
+            {selectedSegment && (
+              <>
+                <div className="segment-chip-row">
+                  {selectedSegment.groups.map((group) => <span className="segment-auc-chip" key={group.value}><strong>{group.value}</strong><small>AUC {formatMetric(group.auc)} · n={group.observations.toLocaleString()}</small></span>)}
+                </div>
+                {segmentRocOption && <EChart option={segmentRocOption} height={470} />}
+              </>
+            )}
+            <div className="segment-method-note">
+              {result.segment_dimensions.map((dimension) => <span key={dimension.column}><strong>{dimension.column}</strong>: {dimension.mode === 'quantiles' ? '3 quantile groups' : `${dimension.bins.length} categorical groups`}</span>)}
+            </div>
           </section>
-        ))}
+        )}
 
-        {result.time_performance && (
+        {result.time_performance && timeData && (
           <section className="panel discrimination-section">
-            <div className="eda-control-row"><div><h2>Performance over time</h2><p>AUC and KS for each period. Periods with only one target class are left blank.</p></div><label className="form-field compact-field"><span>Aggregation</span><select value={discriminationGranularity} onChange={(e) => setDiscriminationGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>Run again after changing aggregation.</small></label></div>
-            {timeOption && <EChart option={timeOption} height={420} />}
+            <div className="eda-control-row">
+              <div><h2>ROC AUC over time</h2><p>Aggregation and subgroup selection update immediately from the completed discrimination run.</p></div>
+              <div className="discrimination-time-controls">
+                <label className="form-field compact-field"><span>Aggregation</span><select value={discriminationGranularity} onChange={(e) => setDiscriminationGranularity(e.target.value as TimeGranularity)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>No rerun required.</small></label>
+                <label className="form-field compact-field"><span>Population</span><select value={discriminationTimeSegmentKey} onChange={(e) => setDiscriminationTimeSegmentKey(e.target.value)}><option value="overall">Overall</option>{timeData.segments.map((segment) => <option key={segment.key} value={segment.key}>{segment.name}</option>)}</select></label>
+              </div>
+            </div>
+            {timeOption && <EChart option={timeOption} height={440} />}
           </section>
         )}
 

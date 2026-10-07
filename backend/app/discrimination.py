@@ -2,11 +2,15 @@ import csv
 import io
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
+from itertools import combinations
 from typing import Any
 
 from fastapi import File, Form, HTTPException, UploadFile
+
+MAX_CATEGORICAL_GROUPS = 20
+QUANTILE_GROUPS = 3
 
 
 def _to_float(value: str | None) -> float | None:
@@ -36,7 +40,7 @@ def _to_datetime(value: str | None) -> datetime | None:
     return None
 
 
-def _time_bucket(dt: datetime, granularity: str = "monthly") -> str:
+def _time_bucket(dt: datetime, granularity: str) -> str:
     if granularity == "daily":
         return dt.strftime("%Y-%m-%d")
     if granularity == "weekly":
@@ -49,12 +53,23 @@ def _time_bucket(dt: datetime, granularity: str = "monthly") -> str:
     return dt.strftime("%Y-%m")
 
 
+def _quantile(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * q
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
 def _roc_points(rows: list[tuple[float, int]]) -> tuple[list[dict[str, float]], float, float]:
-    if not rows:
-        return [], 0.0, 0.0
     positives = sum(target for _, target in rows)
     negatives = len(rows) - positives
-    if positives == 0 or negatives == 0:
+    if not rows or positives == 0 or negatives == 0:
         return [], 0.0, 0.0
 
     ordered = sorted(rows, key=lambda item: item[0], reverse=True)
@@ -62,6 +77,7 @@ def _roc_points(rows: list[tuple[float, int]]) -> tuple[list[dict[str, float]], 
     points = [{"fpr": 0.0, "tpr": 0.0, "threshold": ordered[0][0] + 1e-12}]
     ks = 0.0
     previous_score: float | None = None
+
     for score, target in ordered:
         if previous_score is not None and score != previous_score:
             tpr = tp / positives
@@ -73,41 +89,13 @@ def _roc_points(rows: list[tuple[float, int]]) -> tuple[list[dict[str, float]], 
         else:
             fp += 1
         previous_score = score
+
     points.append({"fpr": 1.0, "tpr": 1.0, "threshold": ordered[-1][0]})
-    ks = max(ks, abs(1.0 - 1.0))
-
-    auc = 0.0
-    for left, right in zip(points, points[1:]):
-        auc += (right["fpr"] - left["fpr"]) * (right["tpr"] + left["tpr"]) / 2
+    auc = sum(
+        (right["fpr"] - left["fpr"]) * (right["tpr"] + left["tpr"]) / 2
+        for left, right in zip(points, points[1:])
+    )
     return points, auc, ks
-
-
-def _rank_table(rows: list[tuple[float, int]], bins: int = 10) -> list[dict[str, Any]]:
-    ordered = sorted(rows, key=lambda item: item[0], reverse=True)
-    total = len(ordered)
-    total_bad = sum(target for _, target in ordered)
-    result = []
-    cumulative_bad = 0
-    for index in range(bins):
-        start = round(index * total / bins)
-        end = round((index + 1) * total / bins)
-        chunk = ordered[start:end]
-        if not chunk:
-            continue
-        defaults = sum(target for _, target in chunk)
-        cumulative_bad += defaults
-        result.append({
-            "bin": index + 1,
-            "observations": len(chunk),
-            "defaults": defaults,
-            "default_rate": defaults / len(chunk),
-            "mean_prediction": sum(score for score, _ in chunk) / len(chunk),
-            "min_prediction": min(score for score, _ in chunk),
-            "max_prediction": max(score for score, _ in chunk),
-            "cumulative_population": end / total,
-            "cumulative_bad_capture": cumulative_bad / total_bad if total_bad else 0.0,
-        })
-    return result
 
 
 def _cap_points(rows: list[tuple[float, int]]) -> list[dict[str, float]]:
@@ -122,31 +110,143 @@ def _cap_points(rows: list[tuple[float, int]]) -> list[dict[str, float]]:
     for index, (_, target) in enumerate(ordered, start=1):
         captured += target
         if index % step == 0 or index == total:
-            result.append({
-                "population": index / total,
-                "bad_capture": captured / total_bad,
-            })
+            result.append({"population": index / total, "bad_capture": captured / total_bad})
     return result
 
 
-def _metrics(rows: list[tuple[float, int]]) -> dict[str, Any]:
+def _metrics(rows: list[tuple[float, int]], include_curves: bool = True) -> dict[str, Any]:
     points, auc, ks = _roc_points(rows)
-    rank = _rank_table(rows)
-    capture10 = 0.0
-    if rank:
-        capture10 = rank[0]["cumulative_bad_capture"]
+    ordered = sorted(rows, key=lambda item: item[0], reverse=True)
+    top_count = max(1, math.ceil(len(ordered) * 0.10))
+    total_bad = sum(target for _, target in ordered)
+    captured = sum(target for _, target in ordered[:top_count])
     return {
         "observations": len(rows),
-        "defaults": sum(target for _, target in rows),
-        "default_rate": sum(target for _, target in rows) / len(rows) if rows else 0.0,
+        "defaults": total_bad,
+        "default_rate": total_bad / len(rows) if rows else 0.0,
         "auc": auc,
         "gini": 2 * auc - 1,
         "ks": ks,
-        "bad_capture_10": capture10,
-        "roc": points,
-        "rank_table": rank,
-        "cap": _cap_points(rows),
+        "bad_capture_10": captured / total_bad if total_bad else 0.0,
+        "roc": points if include_curves else [],
+        "cap": _cap_points(rows) if include_curves else [],
     }
+
+
+def _safe_metrics(rows: list[tuple[float, int]], include_curves: bool = True) -> dict[str, Any]:
+    positives = sum(target for _, target in rows)
+    if len(rows) < 2 or positives == 0 or positives == len(rows):
+        return {
+            "observations": len(rows),
+            "defaults": positives,
+            "default_rate": positives / len(rows) if rows else 0.0,
+            "auc": None,
+            "gini": None,
+            "ks": None,
+            "bad_capture_10": None,
+            "roc": [],
+            "cap": [],
+        }
+    return _metrics(rows, include_curves=include_curves)
+
+
+def _build_dimension_labels(
+    records: list[dict[str, Any]],
+    column: str,
+    semantic_type: str,
+) -> tuple[dict[int, str | None], dict[str, Any]]:
+    labels: dict[int, str | None] = {}
+
+    if semantic_type in {"continuous", "ordinal"}:
+        values = [
+            value for record in records
+            if (value := _to_float(record["row"].get(column))) is not None
+        ]
+        if not values:
+            return labels, {"mode": "quantiles", "bins": []}
+
+        q1 = _quantile(values, 1 / 3)
+        q2 = _quantile(values, 2 / 3)
+        edges = [min(values), q1, q2, max(values)]
+        bin_labels = [
+            f"Q1 · ≤ {q1:.4g}",
+            f"Q2 · {q1:.4g}–{q2:.4g}",
+            f"Q3 · > {q2:.4g}",
+        ]
+        for index, record in enumerate(records):
+            value = _to_float(record["row"].get(column))
+            if value is None:
+                labels[index] = None
+            elif value <= q1:
+                labels[index] = bin_labels[0]
+            elif value <= q2:
+                labels[index] = bin_labels[1]
+            else:
+                labels[index] = bin_labels[2]
+        return labels, {"mode": "quantiles", "bins": bin_labels, "edges": edges}
+
+    raw_values = [
+        str(record["row"].get(column) or "").strip()
+        for record in records
+        if str(record["row"].get(column) or "").strip()
+    ]
+    counts = Counter(raw_values)
+    keep = {value for value, _ in counts.most_common(MAX_CATEGORICAL_GROUPS)}
+    use_other = len(counts) > MAX_CATEGORICAL_GROUPS
+    for index, record in enumerate(records):
+        value = str(record["row"].get(column) or "").strip()
+        if not value:
+            labels[index] = None
+        elif use_other and value not in keep:
+            labels[index] = "Other"
+        else:
+            labels[index] = value
+    return labels, {
+        "mode": "categories",
+        "bins": [value for value, _ in counts.most_common(MAX_CATEGORICAL_GROUPS)] + (["Other"] if use_other else []),
+    }
+
+
+def _segment_result(
+    records: list[dict[str, Any]],
+    name: str,
+    columns: list[str],
+    label_maps: dict[str, dict[int, str | None]],
+) -> dict[str, Any]:
+    groups: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    for index, record in enumerate(records):
+        parts = [label_maps[column].get(index) for column in columns]
+        if any(part is None for part in parts):
+            continue
+        label = " × ".join(str(part) for part in parts)
+        groups[label].append(record["pair"])
+
+    group_results = []
+    for label, rows in sorted(groups.items(), key=lambda item: len(item[1]), reverse=True):
+        metrics = _safe_metrics(rows, include_curves=True)
+        group_results.append({"value": label, **metrics})
+
+    return {"key": " x ".join(columns), "name": name, "columns": columns, "groups": group_results}
+
+
+def _time_series(
+    records: list[dict[str, Any]],
+    granularity: str,
+    group_labels: dict[int, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    buckets: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    for index, record in enumerate(records):
+        parsed = record["date"]
+        if parsed is None:
+            continue
+        if group_labels is not None and group_labels.get(index) is None:
+            continue
+        buckets[_time_bucket(parsed, granularity)].append(record["pair"])
+
+    return [
+        {"bucket": bucket, **_safe_metrics(rows, include_curves=False)}
+        for bucket, rows in sorted(buckets.items())
+    ]
 
 
 async def run_discrimination(
@@ -164,11 +264,18 @@ async def run_discrimination(
     positive_class = str(cfg.get("positiveClass", ""))
     prediction_type = cfg.get("predictionType", "pd")
     score_direction = cfg.get("scoreDirection", "higher-risk")
-    population_columns = cfg.get("populationColumns", [])
+    population_columns = list(cfg.get("populationColumns", []))
+    sensitive_columns = list(cfg.get("sensitiveColumns", []))
+    semantic_types: dict[str, str] = cfg.get("semanticTypes", {})
     time_column = cfg.get("timeColumn", "")
 
     if not prediction_column or not target_column or not positive_class:
         raise HTTPException(status_code=400, detail="Prediction, target and positive class are required.")
+
+    segment_columns = []
+    for column in [*population_columns, *sensitive_columns]:
+        if column and column not in segment_columns and column not in {prediction_column, target_column, time_column}:
+            segment_columns.append(column)
 
     await file.seek(0)
     sample = await file.read(8192)
@@ -191,22 +298,17 @@ async def run_discrimination(
         stream.detach()
         raise HTTPException(status_code=400, detail="The CSV file must contain a header row.")
 
-    usable: list[tuple[float, int]] = []
+    records: list[dict[str, Any]] = []
     excluded_missing_prediction = 0
     excluded_missing_target = 0
-    by_population: dict[str, dict[str, list[tuple[float, int]]]] = {
-        column: defaultdict(list) for column in population_columns
-    }
-    by_time: dict[str, list[tuple[float, int]]] = defaultdict(list)
 
     try:
         for row in reader:
-            raw_prediction = row.get(prediction_column)
-            raw_target = row.get(target_column)
-            prediction = _to_float(raw_prediction)
+            prediction = _to_float(row.get(prediction_column))
             if prediction is None:
                 excluded_missing_prediction += 1
                 continue
+            raw_target = row.get(target_column)
             if raw_target is None or raw_target.strip() == "":
                 excluded_missing_target += 1
                 continue
@@ -216,21 +318,15 @@ async def run_discrimination(
             if prediction_type == "score" and score_direction == "lower-risk":
                 risk_score = -prediction
 
-            pair = (risk_score, target)
-            usable.append(pair)
-
-            for column in population_columns:
-                value = str(row.get(column) or "").strip()
-                if value:
-                    by_population[column][value].append(pair)
-
-            if time_column:
-                parsed = _to_datetime(row.get(time_column))
-                if parsed:
-                    by_time[_time_bucket(parsed, time_granularity)].append(pair)
+            records.append({
+                "pair": (risk_score, target),
+                "row": row,
+                "date": _to_datetime(row.get(time_column)) if time_column else None,
+            })
     finally:
         stream.detach()
 
+    usable = [record["pair"] for record in records]
     if len(usable) < 2:
         raise HTTPException(status_code=400, detail="Not enough usable rows for discrimination analysis.")
     defaults = sum(target for _, target in usable)
@@ -239,68 +335,70 @@ async def run_discrimination(
 
     overall = _metrics(usable)
 
-    populations = []
-    for column, groups in by_population.items():
-        group_results = []
-        for value, rows in sorted(groups.items(), key=lambda item: len(item[1]), reverse=True):
-            if len(rows) < 2:
-                continue
-            positives = sum(target for _, target in rows)
-            if positives == 0 or positives == len(rows):
-                group_results.append({
-                    "value": value,
-                    "observations": len(rows),
-                    "defaults": positives,
-                    "default_rate": positives / len(rows),
-                    "auc": None,
-                    "gini": None,
-                    "ks": None,
-                })
-                continue
-            metrics = _metrics(rows)
-            group_results.append({
-                "value": value,
-                "observations": metrics["observations"],
-                "defaults": metrics["defaults"],
-                "default_rate": metrics["default_rate"],
-                "auc": metrics["auc"],
-                "gini": metrics["gini"],
-                "ks": metrics["ks"],
-            })
-        populations.append({"column": column, "groups": group_results})
+    label_maps: dict[str, dict[int, str | None]] = {}
+    dimension_meta = []
+    for column in segment_columns:
+        labels, meta = _build_dimension_labels(records, column, semantic_types.get(column, "categorical"))
+        label_maps[column] = labels
+        dimension_meta.append({
+            "column": column,
+            "semantic_type": semantic_types.get(column, "categorical"),
+            **meta,
+        })
 
-    time_results = []
-    for bucket, rows in sorted(by_time.items()):
-        positives = sum(target for _, target in rows)
-        if len(rows) < 2 or positives == 0 or positives == len(rows):
-            time_results.append({
-                "bucket": bucket,
-                "observations": len(rows),
-                "defaults": positives,
-                "default_rate": positives / len(rows) if rows else 0.0,
-                "auc": None,
-                "gini": None,
-                "ks": None,
-            })
-        else:
-            metrics = _metrics(rows)
-            time_results.append({
-                "bucket": bucket,
-                "observations": metrics["observations"],
-                "defaults": metrics["defaults"],
-                "default_rate": metrics["default_rate"],
-                "auc": metrics["auc"],
-                "gini": metrics["gini"],
-                "ks": metrics["ks"],
-            })
+    segments = [
+        _segment_result(records, column, [column], label_maps)
+        for column in segment_columns
+    ]
+    segments.extend(
+        _segment_result(records, f"{left} × {right}", [left, right], label_maps)
+        for left, right in combinations(segment_columns, 2)
+    )
+
+    granularities: dict[str, dict[str, Any]] = {}
+    if time_column:
+        for granularity in ("daily", "weekly", "monthly", "quarterly", "yearly"):
+            overall_time = _time_series(records, granularity)
+            segment_time = []
+            for segment in segments:
+                group_series = []
+                columns = segment["columns"]
+                groups: dict[str, dict[int, str | None]] = {}
+                for index in range(len(records)):
+                    parts = [label_maps[column].get(index) for column in columns]
+                    if any(part is None for part in parts):
+                        continue
+                    label = " × ".join(str(part) for part in parts)
+                    groups.setdefault(label, {})[index] = label
+
+                for group_name, membership in groups.items():
+                    group_labels = {
+                        index: (group_name if index in membership else None)
+                        for index in range(len(records))
+                    }
+                    group_series.append({
+                        "value": group_name,
+                        "buckets": _time_series(records, granularity, group_labels),
+                    })
+                segment_time.append({
+                    "key": segment["key"],
+                    "name": segment["name"],
+                    "columns": columns,
+                    "groups": group_series,
+                })
+
+            granularities[granularity] = {
+                "overall": overall_time,
+                "segments": segment_time,
+            }
 
     return {
         "overall": overall,
-        "population_performance": populations,
+        "segment_dimensions": dimension_meta,
+        "segment_performance": segments,
         "time_performance": {
-            "time_column": time_column or None,
-            "granularity": time_granularity,
-            "buckets": time_results,
+            "time_column": time_column,
+            "granularities": granularities,
         } if time_column else None,
         "excluded": {
             "missing_prediction": excluded_missing_prediction,

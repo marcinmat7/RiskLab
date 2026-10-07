@@ -348,3 +348,18 @@
 @media (max-width: 760px) {
   .discrimination-kpis { grid-template-columns: 1fr 1fr; }
 }
+
+
+.segment-performance-section .echart { margin-top: 14px; }
+.segment-chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.segment-auc-chip { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid #253650; border-radius: 9px; background: #0c1422; }
+.segment-auc-chip strong { color: #dce7f6; font-size: 11px; }
+.segment-auc-chip small { color: #6f8098; font-size: 10px; }
+.segment-method-note { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: #71819a; font-size: 10px; }
+.segment-method-note span { padding: 5px 8px; border: 1px solid #223149; border-radius: 999px; background: #0a1220; }
+.segment-method-note strong { color: #9eb2ce; }
+.discrimination-time-controls { display: grid; grid-template-columns: repeat(2, minmax(190px, 1fr)); gap: 10px; width: min(560px, 100%); }
+
+@media (max-width: 760px) {
+  .discrimination-time-controls { grid-template-columns: 1fr; width: 100%; }
+}
