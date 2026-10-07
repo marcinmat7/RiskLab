@@ -729,6 +729,27 @@ function App() {
     const populationEnabled = validationConfig.populationColumns.length > 0
     const timeEnabled = Boolean(validationConfig.timeColumn)
 
+    if (!edaResult) {
+      return (
+        <section className="page-content eda-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic profiling only — no credit-risk-specific interpretation is applied here.</p></div>
+            <div className="eda-header-actions">
+              <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+              <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
+            </div>
+          </div>
+          {edaError && <div className="message error-message">{edaError}</div>}
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>{status === 'running' ? 'EDA is running…' : 'Ready to profile the dataset'}</h2>
+            <p>RiskLab will calculate data quality, distributions, relationships and missingness diagnostics. Optional population and time views use the fields configured in Validation.</p>
+            <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
+          </section>
+        </section>
+      )
+    }
+
     const sortedProfiles = [...edaResult.profiles].sort((a, b) => {
       const direction = qualitySortDirection === 'asc' ? 1 : -1
       const qualityRank = (profile: EdaProfile) => profile.missing_rate > .2 ? 2 : profile.missing_rate > .05 ? 1 : 0
@@ -964,15 +985,7 @@ function App() {
 
         {edaError && <div className="message error-message">{edaError}</div>}
 
-        {!edaResult ? (
-          <section className="panel analysis-run-card">
-            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
-            <h2>{status === 'running' ? 'EDA is running…' : 'Ready to profile the dataset'}</h2>
-            <p>RiskLab will calculate data quality, distributions, relationships and missingness diagnostics. Optional population and time views use the fields configured in Validation.</p>
-            <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
-          </section>
-        ) : (
-          <>
+        <>
             <div className="eda-tabs">
               {tabs.map((tab) => {
                 const locked = (tab === 'Population comparison' && !populationEnabled) || (tab === 'Time analysis' && !timeEnabled)
@@ -1197,8 +1210,7 @@ function App() {
             )}
 
             <div className="eda-footer-meta">Last run: {lastRun.EDA ?? '—'}</div>
-          </>
-        )}
+        </>
       </section>
     )
   }
