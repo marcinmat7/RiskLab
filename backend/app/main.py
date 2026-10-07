@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.discrimination import run_discrimination
 from app.eda import run_eda
 
 app = FastAPI(title="RiskLab API", version="0.1.0")
@@ -183,3 +184,16 @@ async def preview_dataset(file: UploadFile = File(...)) -> dict[str, object]:
 @app.post("/eda/run")
 async def eda_run(file: UploadFile = File(...), config: str = Form(...), time_granularity: str = Form("monthly")) -> dict[str, object]:
     return await run_eda(file=file, config=config, time_granularity=time_granularity)
+
+
+@app.post("/discrimination/run")
+async def discrimination_run(
+    file: UploadFile = File(...),
+    config: str = Form(...),
+    time_granularity: str = Form("monthly"),
+) -> dict[str, object]:
+    return await run_discrimination(
+        file=file,
+        config=config,
+        time_granularity=time_granularity,
+    )
