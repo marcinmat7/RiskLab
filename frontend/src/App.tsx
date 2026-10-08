@@ -615,7 +615,6 @@ function App() {
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
   const [edaError, setEdaError] = useState<string | null>(null)
   const [edaTab, setEdaTab] = useState<EdaTab>('Overview')
-  const [edaColumn, setEdaColumn] = useState<string>('')
   const [distributionFilter, setDistributionFilter] = useState<'all' | 'numeric' | 'categorical' | 'other'>('all')
   const [distributionSearch, setDistributionSearch] = useState('')
   const [distributionSort, setDistributionSort] = useState<'dataset' | 'missing' | 'auc' | 'name'>('dataset')
@@ -687,7 +686,6 @@ function App() {
     setEdaResult(null)
     setEdaError(null)
     setEdaTab('Overview')
-    setEdaColumn('')
     setDistributionFilter('all')
     setDistributionSearch('')
     setDistributionSort('dataset')
@@ -744,7 +742,6 @@ function App() {
     setStabilityComparison('')
     setStabilityVariable('')
     setEdaTab('Overview')
-    setEdaColumn('')
     setDistributionDetailColumn('')
     setPopulationColumn('')
     setPopulationReference('')
@@ -1009,7 +1006,6 @@ function App() {
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
       const result = body as EdaResult
       setEdaResult(result)
-      setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
       setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
       setEdaTimeMissingColumn((current) => current || result.profiles.find((profile) => profile.missing_count > 0)?.column || result.profiles[0]?.column || '')
       const firstPopulation = result.population_comparison[0]
@@ -1354,7 +1350,6 @@ function App() {
     }
 
     const status = analysisStatus.EDA
-    const activeProfile = edaResult?.profiles.find((profile) => profile.column === edaColumn)
     const tabs: EdaTab[] = ['Overview', 'Data quality', 'Distributions', 'Relationships', 'Population comparison', 'Time analysis', 'Missingness']
     const populationEnabled = validationConfig.populationColumns.length > 0
     const timeEnabled = Boolean(validationConfig.timeColumn)
@@ -1732,7 +1727,7 @@ function App() {
                       type="button"
                       className="distribution-card"
                       key={profile.column}
-                      onClick={() => { setEdaColumn(profile.column); setDistributionDetailColumn(profile.column) }}
+                      onClick={() => setDistributionDetailColumn(profile.column)}
                     >
                       <div className="distribution-card-head">
                         <div><strong>{profile.column}</strong><span>{profile.semantic_type}</span></div>
