@@ -114,6 +114,15 @@ type EdaProfile = {
     cdf: { x: number; cdf: number }[]
   }
   categories?: { value: string; count: number; share: number }[]
+  univariate_auc: number | null
+  auc_direction: 'higher-is-riskier' | 'lower-is-riskier' | 'category-logit' | null
+  category_logits: {
+    value: string
+    count: number
+    defaults: number
+    default_rate: number
+    logit: number
+  }[]
   uniqueness_rate?: number | null
   text_summary?: { mean_length: number; median_length: number; max_length: number }
 }
@@ -607,6 +616,10 @@ function App() {
   const [edaError, setEdaError] = useState<string | null>(null)
   const [edaTab, setEdaTab] = useState<EdaTab>('Overview')
   const [edaColumn, setEdaColumn] = useState<string>('')
+  const [distributionFilter, setDistributionFilter] = useState<'all' | 'numeric' | 'categorical' | 'other'>('all')
+  const [distributionSearch, setDistributionSearch] = useState('')
+  const [distributionSort, setDistributionSort] = useState<'dataset' | 'missing' | 'auc' | 'name'>('dataset')
+  const [distributionDetailColumn, setDistributionDetailColumn] = useState('')
   const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
   const [edaTimeMissingColumn, setEdaTimeMissingColumn] = useState<string>('')
   const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
@@ -675,6 +688,10 @@ function App() {
     setEdaError(null)
     setEdaTab('Overview')
     setEdaColumn('')
+    setDistributionFilter('all')
+    setDistributionSearch('')
+    setDistributionSort('dataset')
+    setDistributionDetailColumn('')
     setEdaTimeVariable('')
     setEdaTimeMissingColumn('')
     setQualitySort('missing')
@@ -728,6 +745,7 @@ function App() {
     setStabilityVariable('')
     setEdaTab('Overview')
     setEdaColumn('')
+    setDistributionDetailColumn('')
     setPopulationColumn('')
     setPopulationReference('')
     setPopulationComparison('')
