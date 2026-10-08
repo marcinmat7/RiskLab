@@ -511,3 +511,60 @@
   .distribution-modal-backdrop { padding: 12px; }
   .distribution-modal { max-height: calc(100vh - 24px); }
 }
+
+
+.metric-label-with-help,
+.heading-with-help { display: inline-flex; align-items: center; gap: 6px; }
+
+.metric-help-button { display: inline-grid; place-items: center; width: 17px; height: 17px; padding: 0; border: 1px solid #344761; border-radius: 50%; background: #101a29; color: #8ea0b8; font-size: 10px; font-weight: 800; line-height: 1; cursor: pointer; vertical-align: middle; transition: border-color .15s ease, color .15s ease, background .15s ease; }
+.metric-help-button:hover { border-color: #5788d6; background: rgba(79,140,255,.10); color: #a9c7ff; }
+.metric-help-button:focus-visible { outline: 2px solid #4f8cff; outline-offset: 2px; }
+
+.methodology-page { scroll-behavior: smooth; }
+.methodology-search-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px; }
+.methodology-search-card h2 { margin: 0 0 4px; }
+.methodology-search-card p { margin: 0; color: #71819a; font-size: 11px; }
+.methodology-search { width: min(420px, 100%); min-height: 38px; padding: 0 12px; border: 1px solid #2a3b55; border-radius: 8px; background: #0a1421; color: #dce6f5; }
+
+.methodology-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; margin-top: 14px; align-items: start; }
+.methodology-index { position: sticky; top: 72px; max-height: calc(100vh - 90px); overflow-y: auto; padding: 14px; }
+.methodology-index > strong { display: block; margin-bottom: 12px; color: #dbe7f7; font-size: 12px; }
+.methodology-index > div { margin-top: 14px; }
+.methodology-index > div > span { display: block; margin-bottom: 5px; color: #60738f; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.methodology-index button { display: block; width: 100%; padding: 5px 6px; border: 0; border-radius: 6px; background: transparent; color: #91a1b8; text-align: left; font-size: 10px; cursor: pointer; }
+.methodology-index button:hover { background: rgba(79,140,255,.08); color: #c9dbf5; }
+
+.methodology-content { min-width: 0; }
+.methodology-group + .methodology-group { margin-top: 24px; }
+.methodology-group-heading { margin: 0 0 10px 2px; }
+.methodology-group-heading h2 { margin: 2px 0 0; }
+.methodology-entry { scroll-margin-top: 84px; padding: 18px; }
+.methodology-entry + .methodology-entry { margin-top: 10px; }
+.methodology-entry-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.methodology-entry-head h3 { margin: 0 0 5px; color: #e0eaf7; font-size: 16px; }
+.methodology-entry-head p { margin: 0; max-width: 780px; color: #8191a7; font-size: 11px; line-height: 1.55; }
+.methodology-anchor { flex: 0 0 auto; color: #526782; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; }
+
+.methodology-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.methodology-block { margin-top: 12px; padding: 12px; border: 1px solid #1e2d42; border-radius: 9px; background: #0a1420; }
+.methodology-block h4 { margin: 0 0 7px; color: #9db0c8; font-size: 10px; text-transform: uppercase; letter-spacing: .045em; }
+.methodology-block code { display: block; overflow-x: auto; padding: 9px 10px; border-radius: 7px; background: #07101a; color: #b9c9dc; font-size: 11px; white-space: pre-wrap; }
+.methodology-block ul { margin: 0; padding-left: 18px; color: #8e9eb3; font-size: 10px; line-height: 1.55; }
+.methodology-block li + li { margin-top: 4px; }
+.methodology-limitations { border-color: rgba(245,170,67,.20); background: rgba(245,170,67,.035); }
+
+.methodology-related { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.methodology-related > span { color: #61748e; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.methodology-related button { padding: 4px 7px; border: 1px solid #263851; border-radius: 999px; background: #0c1725; color: #8fa3be; font-size: 9px; cursor: pointer; }
+.methodology-related button:hover { border-color: #416798; color: #b9d0ef; }
+
+@media (max-width: 980px) {
+  .methodology-layout { grid-template-columns: 1fr; }
+  .methodology-index { position: static; max-height: none; }
+  .methodology-index > div { display: none; }
+  .methodology-columns { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .methodology-search-card { align-items: stretch; flex-direction: column; }
+  .methodology-search { width: 100%; }
+}
