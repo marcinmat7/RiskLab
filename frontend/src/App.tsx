@@ -25,7 +25,7 @@ type DatasetPreview = {
 }
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
-type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports'
+type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports' | 'Methodology'
 type AnalysisSection = Exclude<Section, 'Overview' | 'Data'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
@@ -371,8 +371,214 @@ type StabilityResult = {
   }
 }
 
-const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
+const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports', 'Methodology']
 const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
+
+type MethodologyEntry = {
+  id: string
+  title: string
+  aliases: string[]
+  group: 'Discrimination' | 'Calibration' | 'Stability' | 'EDA'
+  summary: string
+  formula?: string
+  interpretation: string[]
+  implementation: string[]
+  limitations: string[]
+  related: string[]
+}
+
+const methodologyEntries: MethodologyEntry[] = [
+  {
+    id: 'roc-auc',
+    title: 'ROC AUC',
+    aliases: ['auc', 'area under roc', 'receiver operating characteristic'],
+    group: 'Discrimination',
+    summary: 'Measures how well a score ranks randomly selected defaulted observations above randomly selected non-defaulted observations.',
+    formula: 'AUC = P(score_default > score_non-default) + 0.5 · P(tie)',
+    interpretation: ['0.5 means no ranking power.', '1.0 means perfect ranking.', 'AUC describes ranking, not probability calibration.'],
+    implementation: ['RiskLab normalizes model direction so higher internal risk score means higher risk.', 'ROC points are evaluated at score boundaries.'],
+    limitations: ['AUC can look strong even when probability calibration is poor.', 'It can hide weak performance in a specific operating region or subgroup.'],
+    related: ['gini', 'ks', 'cap'],
+  },
+  {
+    id: 'gini',
+    title: 'Gini coefficient',
+    aliases: ['gini'],
+    group: 'Discrimination',
+    summary: 'A linear transformation of ROC AUC commonly used in credit risk.',
+    formula: 'Gini = 2 · AUC − 1',
+    interpretation: ['0 corresponds to AUC = 0.5.', '1 corresponds to perfect ranking.'],
+    implementation: ['RiskLab derives Gini directly from the calculated ROC AUC.'],
+    limitations: ['It contains the same ranking information as AUC and should not be interpreted as a separate independent performance test.'],
+    related: ['roc-auc', 'ks'],
+  },
+  {
+    id: 'ks',
+    title: 'Kolmogorov–Smirnov statistic (KS)',
+    aliases: ['ks', 'kolmogorov smirnov'],
+    group: 'Discrimination',
+    summary: 'Measures the largest separation between cumulative default and non-default score distributions.',
+    formula: 'KS = max |TPR − FPR|',
+    interpretation: ['Higher values indicate stronger separation.', 'The statistic is tied to the point of maximum separation, unlike AUC which summarizes the full ranking curve.'],
+    implementation: ['RiskLab computes KS from the same score-ordered ROC traversal used for discrimination.'],
+    limitations: ['A single maximum-separation point can hide behaviour elsewhere in the score range.'],
+    related: ['roc-auc', 'gini'],
+  },
+  {
+    id: 'cap',
+    title: 'CAP / cumulative gains curve',
+    aliases: ['cap', 'cumulative accuracy profile', 'gains'],
+    group: 'Discrimination',
+    summary: 'Shows how quickly defaults are captured when observations are ordered from highest to lowest predicted risk.',
+    interpretation: ['A stronger model captures a larger share of defaults in a smaller share of the population.', 'The diagonal-like random benchmark represents no ranking power.'],
+    implementation: ['RiskLab orders observations by normalized risk score and reports cumulative population share versus cumulative captured defaults.'],
+    limitations: ['The shape depends on the portfolio default rate, so direct visual comparison across very different populations needs care.'],
+    related: ['roc-auc', 'bad-capture'],
+  },
+  {
+    id: 'bad-capture',
+    title: 'Bad capture @ 10%',
+    aliases: ['bad capture', 'capture at 10', 'top 10'],
+    group: 'Discrimination',
+    summary: 'Share of all defaults captured within the riskiest 10% of observations.',
+    formula: 'Bad capture @ 10% = defaults in top-risk 10% / all defaults',
+    interpretation: ['Higher values indicate that defaults are concentrated near the risky end of the ranking.'],
+    implementation: ['RiskLab uses ceil(10% · N) observations after sorting by normalized risk score.'],
+    limitations: ['It focuses on one operating point and is sensitive to sample size and the portfolio default rate.'],
+    related: ['cap', 'roc-auc'],
+  },
+  {
+    id: 'brier',
+    title: 'Brier score',
+    aliases: ['brier'],
+    group: 'Calibration',
+    summary: 'Mean squared error between predicted probabilities and binary outcomes.',
+    formula: 'Brier = mean((p − y)²)',
+    interpretation: ['Lower is better.', 'A value of 0 means perfect probability predictions on the observed sample.'],
+    implementation: ['RiskLab calculates the score on usable PD/target observations.'],
+    limitations: ['Brier score combines calibration and discrimination effects; it is not a pure calibration test.'],
+    related: ['spiegelhalter', 'oe-ratio', 'calibration-curve'],
+  },
+  {
+    id: 'spiegelhalter',
+    title: 'Spiegelhalter Z-test',
+    aliases: ['spiegelhalter', 'spiegelhalter test', 'z test calibration'],
+    group: 'Calibration',
+    summary: 'Tests whether submitted predicted probabilities are statistically consistent with observed binary outcomes.',
+    formula: 'Z = Σ[(y − p)(1 − 2p)] / √Σ[(1 − 2p)²p(1 − p)]',
+    interpretation: ['p ≥ 5%: no significant evidence of miscalibration.', '1% ≤ p < 5%: evidence of miscalibration.', 'p < 1%: strong evidence of miscalibration.'],
+    implementation: ['RiskLab uses the observation-level two-sided test.', 'The displayed p-value is computed from the standard normal distribution.'],
+    limitations: ['A non-significant result does not prove good calibration.', 'Statistical power depends on sample size and the distribution of submitted probabilities.'],
+    related: ['brier', 'oe-ratio', 'calibration-curve'],
+  },
+  {
+    id: 'oe-ratio',
+    title: 'Observed / Expected ratio (O/E)',
+    aliases: ['oe', 'o/e', 'observed expected'],
+    group: 'Calibration',
+    summary: 'Compares the observed number of defaults with the number expected from submitted PDs.',
+    formula: 'O/E = Σy / Σp',
+    interpretation: ['O/E = 1 indicates agreement in average risk level.', 'O/E > 1 means observed defaults exceed expected defaults.', 'O/E < 1 means expected defaults exceed observed defaults.'],
+    implementation: ['Expected defaults are the sum of individual PD values.'],
+    limitations: ['O/E measures average calibration and can miss offsetting calibration errors across the PD range.'],
+    related: ['brier', 'spiegelhalter', 'calibration-curve'],
+  },
+  {
+    id: 'calibration-curve',
+    title: 'Calibration curve',
+    aliases: ['calibration plot', 'reliability curve'],
+    group: 'Calibration',
+    summary: 'Compares average predicted PD with observed default rate across groups of observations.',
+    interpretation: ['Points near the 45° line indicate agreement between predicted and observed rates.', 'Points above the line indicate underprediction of risk; points below indicate overprediction.'],
+    implementation: ['RiskLab currently uses 10 equal-frequency PD bins for the overall curve.', 'Observed-rate confidence intervals are computed with Wilson intervals in the backend.'],
+    limitations: ['The visual result depends on binning, and sparse bins can be noisy.'],
+    related: ['wilson', 'brier', 'spiegelhalter'],
+  },
+  {
+    id: 'wilson',
+    title: 'Wilson confidence interval',
+    aliases: ['wilson', 'confidence interval default rate'],
+    group: 'Calibration',
+    summary: 'Binomial proportion confidence interval used for observed default rates.',
+    interpretation: ['Wider intervals indicate greater uncertainty, typically because a bin contains fewer observations or defaults.'],
+    implementation: ['RiskLab computes 95% Wilson intervals for observed default rates in calibration bins.'],
+    limitations: ['The interval describes uncertainty in the observed rate, not uncertainty in model parameters or predicted PDs.'],
+    related: ['calibration-curve'],
+  },
+  {
+    id: 'psi',
+    title: 'Population Stability Index (PSI)',
+    aliases: ['psi', 'population stability index', 'stability index'],
+    group: 'Stability',
+    summary: 'Measures distribution shift between a reference population and a comparison population.',
+    formula: 'PSI = Σ (comparison_share − reference_share) · ln(comparison_share / reference_share)',
+    interpretation: ['RiskLab default heuristic: PSI < 0.10 low shift.', '0.10–0.25 moderate shift.', '> 0.25 high shift.'],
+    implementation: ['Numeric bin edges are defined from reference-population quantiles and reused for comparison.', 'Categorical variables use categories plus Other where needed.', 'Missing is treated as a separate bucket.', 'Small epsilon smoothing avoids division by zero.'],
+    limitations: ['The 0.10/0.25 thresholds are heuristics, not universal regulatory rules.', 'PSI depends on binning and sample size and does not explain the cause of drift.'],
+    related: ['missing-rate'],
+  },
+  {
+    id: 'pearson',
+    title: 'Pearson correlation',
+    aliases: ['pearson', 'pearson r', 'correlation'],
+    group: 'EDA',
+    summary: 'Measures the strength and direction of a linear relationship between two numeric variables.',
+    formula: 'r = cov(X,Y) / (σX · σY)',
+    interpretation: ['Values range from −1 to 1.', 'The sign gives direction; absolute magnitude gives linear association strength.'],
+    implementation: ['RiskLab computes Pearson correlation on paired non-missing numeric values from the EDA sample.'],
+    limitations: ['Correlation does not imply causation.', 'Pearson correlation can miss strong nonlinear relationships and is sensitive to outliers.'],
+    related: ['cramers-v', 'eta'],
+  },
+  {
+    id: 'cramers-v',
+    title: "Cramér's V",
+    aliases: ['cramers v', 'cramér', 'categorical association'],
+    group: 'EDA',
+    summary: 'Measures association strength between two categorical variables using the chi-squared contingency-table statistic.',
+    formula: 'V = √[(χ² / n) / min(r − 1, c − 1)]',
+    interpretation: ['Values range from 0 to 1.', '0 indicates no detected association; larger values indicate stronger association.'],
+    implementation: ['RiskLab calculates V for categorical/boolean pairs when cardinality is manageable.'],
+    limitations: ['It has no direction or sign.', 'Large samples can make small relationships statistically detectable even when practical association is weak.'],
+    related: ['pearson', 'eta'],
+  },
+  {
+    id: 'eta',
+    title: 'Correlation ratio η',
+    aliases: ['eta', 'correlation ratio', 'η'],
+    group: 'EDA',
+    summary: 'Measures how strongly a categorical grouping explains variation in a numeric variable.',
+    formula: 'η = √(between-group sum of squares / total sum of squares)',
+    interpretation: ['Values range from 0 to 1.', 'Higher values mean numeric values differ more strongly between categories.'],
+    implementation: ['RiskLab uses η for mixed numeric–categorical relationships in the EDA association heatmap.'],
+    limitations: ['η gives strength but not direction.', 'Association does not imply causation.'],
+    related: ['pearson', 'cramers-v'],
+  },
+  {
+    id: 'missing-rate',
+    title: 'Missing rate',
+    aliases: ['missing', 'missingness', 'null rate'],
+    group: 'EDA',
+    summary: 'Share of observations for which a variable is missing according to RiskLab missing-value rules.',
+    formula: 'Missing rate = missing observations / all observations',
+    interpretation: ['Higher missingness can reduce usable sample size and may indicate data-quality or population-change issues.'],
+    implementation: ['RiskLab treats empty values and common markers such as NA, N/A, null, none and NaN as missing in EDA.'],
+    limitations: ['A missing rate alone does not identify the missingness mechanism (MCAR, MAR or MNAR).'],
+    related: ['psi'],
+  },
+  {
+    id: 'univariate-auc',
+    title: 'Univariate AUC',
+    aliases: ['univariate auc', 'single variable auc', 'category logit auc'],
+    group: 'EDA',
+    summary: 'Descriptive measure of how well one variable by itself ranks the configured default target.',
+    interpretation: ['For numeric variables RiskLab direction-normalizes the displayed value to at least 0.5.', 'For categorical variables observations are scored by smoothed category default-rate logits.'],
+    implementation: ['Calculated on the EDA reservoir sample.', 'Categorical smoothing uses (defaults + 0.5) / (count + 1) before the logit transform.'],
+    limitations: ['It is in-sample and descriptive, not model-validation evidence.', 'Categorical AUC can be optimistic for high-cardinality variables.'],
+    related: ['roc-auc'],
+  },
+]
+
+const methodologyGroups: MethodologyEntry['group'][] = ['Discrimination', 'Calibration', 'Stability', 'EDA']
 
 const metrics = [
   { label: 'AUC', value: '0.784', delta: '+0.012', tone: 'positive' },
