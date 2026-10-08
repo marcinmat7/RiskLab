@@ -461,3 +461,16 @@
   .stability-selector-grid { grid-template-columns: 1fr; min-width: 0; width: 100%; }
   .stability-time-grid { grid-template-columns: 1fr; }
 }
+
+
+.validation-parsing-warnings { margin-top: 12px; border: 1px solid rgba(245,170,67,.28); border-radius: 10px; overflow: hidden; background: rgba(245,170,67,.045); }
+.validation-parsing-warnings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid rgba(245,170,67,.18); }
+.validation-parsing-warnings-head strong { color: #e6c17a; font-size: 11px; }
+.validation-parsing-warnings-head span { color: #8f7b59; font-size: 9px; }
+.validation-parsing-warning { padding: 10px 12px; }
+.validation-parsing-warning + .validation-parsing-warning { border-top: 1px solid rgba(245,170,67,.12); }
+.validation-parsing-warning > div { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.validation-parsing-warning strong { color: #dce6f5; font-size: 11px; }
+.validation-parsing-warning > div span { padding: 2px 6px; border-radius: 999px; background: rgba(245,170,67,.10); color: #d6a957; font-size: 9px; font-weight: 700; }
+.validation-parsing-warning p { margin: 5px 0 0; color: #9aaaBE; font-size: 10px; line-height: 1.45; }
+.validation-parsing-warning small { display: block; margin-top: 4px; color: #71819a; font-size: 9px; }
