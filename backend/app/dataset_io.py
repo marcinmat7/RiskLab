@@ -96,14 +96,16 @@ def _read_delimited(payload: bytes, extension: str) -> tuple[list[str], list[dic
 
 
 def _table_to_rows(table: pa.Table) -> tuple[list[str], list[dict[str, str]]]:
-    columns = _validate_columns(table.column_names)
+    raw_columns = list(table.column_names)
+    columns = _validate_columns(raw_columns)
+    rename = dict(zip(raw_columns, columns))
     if table.num_rows > MAX_ROWS:
         raise HTTPException(
             status_code=413,
             detail=f"Dataset exceeds the {MAX_ROWS:,} row limit.",
         )
     rows = [
-        {column: _stringify(row.get(column)) for column in columns}
+        {rename[raw_column]: _stringify(row.get(raw_column)) for raw_column in raw_columns}
         for row in table.to_pylist()
     ]
     return columns, rows
