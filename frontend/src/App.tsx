@@ -581,12 +581,12 @@ const methodologyEntries: MethodologyEntry[] = [
 const methodologyGroups: MethodologyEntry['group'][] = ['Discrimination', 'Calibration', 'Stability', 'EDA']
 
 const metrics = [
-  { label: 'AUC', value: '0.784', delta: '+0.012', tone: 'positive' },
-  { label: 'Gini', value: '0.568', delta: '+0.015', tone: 'positive' },
-  { label: 'KS', value: '0.421', delta: '+0.008', tone: 'positive' },
-  { label: 'Brier score', value: '0.039', delta: '-0.003', tone: 'negative' },
-  { label: 'Observations', value: '125,430', delta: '12 features', tone: 'neutral' },
-  { label: 'Default rate', value: '3.2%', delta: '4,015 defaults', tone: 'neutral' },
+  { label: 'AUC', value: '0.784', delta: '+0.012', tone: 'positive', help: 'roc-auc' },
+  { label: 'Gini', value: '0.568', delta: '+0.015', tone: 'positive', help: 'gini' },
+  { label: 'KS', value: '0.421', delta: '+0.008', tone: 'positive', help: 'ks' },
+  { label: 'Brier score', value: '0.039', delta: '-0.003', tone: 'negative', help: 'brier' },
+  { label: 'Observations', value: '125,430', delta: '12 features', tone: 'neutral', help: null },
+  { label: 'Default rate', value: '3.2%', delta: '4,015 defaults', tone: 'neutral', help: null },
 ]
 
 const analysisCopy: Record<AnalysisSection, { title: string; description: string; action: string }> = {
@@ -1522,7 +1522,7 @@ function App() {
         <div className="header-actions"><button className="secondary-button">Version 1.0⌄</button><button className="secondary-button">Validation run&nbsp;&nbsp;<strong>2024-12-01</strong></button><button className="primary-button">▷ Run validation</button></div>
       </div>
       <div className="tabs"><button className="active">Summary</button><button>Key metrics</button><button>Charts</button><button>Data quality</button><button>Recent findings</button></div>
-      <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
+      <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span className={metric.help ? 'metric-label-with-help' : undefined}>{metric.label}{metric.help ? <> {metricHelp(metric.help, metric.label)}</> : null}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
       <div className="chart-grid">
         <article className="panel chart-card"><div className="panel-title"><h2>ROC Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="30" className="dash-line"/><path d="M50,200 C90,105 165,65 250,49 C345,31 450,27 560,25" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model (AUC = 0.784)</div></article>
         <article className="panel chart-card"><div className="panel-title"><h2>Calibration Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="25" className="dash-line"/><polyline points="50,198 115,179 185,163 255,139 330,122 405,110 480,86 560,52" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model calibration</div></article>
@@ -2074,7 +2074,7 @@ function App() {
                     >
                       <div className="distribution-card-head">
                         <div><strong>{profile.column}</strong><span>{profile.semantic_type}</span></div>
-                        {profile.univariate_auc !== null && <span className="distribution-auc">AUC {profile.univariate_auc.toFixed(3)}</span>}
+                        {profile.univariate_auc !== null && <span className="distribution-auc">AUC {profile.univariate_auc.toFixed(3)} {metricHelp('univariate-auc', 'Univariate AUC')}</span>}
                       </div>
 
                       {(profile.numeric_summary || profile.categories) ? miniBars(profile) : (
@@ -2186,7 +2186,7 @@ function App() {
                     <div className="heatmap-meta">Showing {focusedRelationshipColumns.length} of {relationshipBaseColumns.length} variables. Search or choose a focus variable to navigate large matrices.</div>
                     <div className="heatmap-scroll"><EChart option={heatmapOption(relationshipMode)} height={Math.max(520, focusedRelationshipColumns.length * 27 + 190)} /></div>
                     <div className="table-wrap relationship-table">
-                      <table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.filter((item) => relationshipMode === 'mixed' || item.kind === 'Pearson correlation').slice(0, 20).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table>
+                      <table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.filter((item) => relationshipMode === 'mixed' || item.kind === 'Pearson correlation').slice(0, 20).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td><span className="metric-label-with-help">{item.kind} {item.kind === 'Pearson correlation' ? metricHelp('pearson', 'Pearson correlation') : item.kind === "Cramér's V" ? metricHelp('cramers-v', "Cramér's V") : metricHelp('eta', 'Correlation ratio eta')}</span></td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table>
                     </div>
                   </>
                 ) : <div className="eda-no-data">No variables match the current relationship view.</div>}
