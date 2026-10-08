@@ -2119,7 +2119,7 @@ function App() {
                         <div><span>Type</span><strong>{distributionDetailProfile.semantic_type}</strong></div>
                         <div><span>Missing</span><strong>{formatPercent(distributionDetailProfile.missing_rate)}</strong></div>
                         <div><span>Unique</span><strong>{distributionDetailProfile.unique_count_capped ? '>10k' : (distributionDetailProfile.unique_count ?? '—')}</strong></div>
-                        <div><span>Univariate AUC</span><strong>{distributionDetailProfile.univariate_auc === null ? '—' : distributionDetailProfile.univariate_auc.toFixed(3)}</strong></div>
+                        <div><span className="metric-label-with-help">Univariate AUC {metricHelp('univariate-auc', 'Univariate AUC')}</span><strong>{distributionDetailProfile.univariate_auc === null ? '—' : distributionDetailProfile.univariate_auc.toFixed(3)}</strong></div>
                       </div>
 
                       {distributionDetailProfile.numeric_summary && (
@@ -2170,7 +2170,7 @@ function App() {
             {edaTab === 'Relationships' && (
               <section className="panel eda-section relationships-section">
                 <div className="eda-control-row">
-                  <div><h2>Relationship heatmap</h2><p>Numeric view shows signed Pearson correlation. Mixed view shows association strength on a 0–1 scale using |Pearson|, Cramér's V and correlation ratio η.</p></div>
+                  <div><h2>Relationship heatmap</h2><p>Numeric view shows signed Pearson correlation {metricHelp('pearson', 'Pearson correlation')}. Mixed view uses |Pearson|, Cramér's V {metricHelp('cramers-v', "Cramér's V")} and correlation ratio η {metricHelp('eta', 'Correlation ratio eta')}.</p></div>
                   <div className="relationship-controls">
                     <div className="segmented-control">
                       <button className={relationshipMode === 'numeric' ? 'active' : ''} onClick={() => { setRelationshipMode('numeric'); setRelationshipFocus('') }}>Numeric correlations</button>
@@ -2196,7 +2196,7 @@ function App() {
             {edaTab === 'Population comparison' && (!populationEnabled ? renderLocked('population') : (
               <section className="panel eda-section population-analysis">
                 <div className="eda-control-row">
-                  <div><h2>Population comparison</h2><p>PSI is calculated for every eligible variable using the selected reference population. Numeric bins are defined on the reference population; Missing is a separate bin.</p></div>
+                  <div><h2 className="heading-with-help">Population comparison {metricHelp('psi', 'Population Stability Index')}</h2><p>PSI is calculated for every eligible variable using the selected reference population. Numeric bins are defined on the reference population; Missing is a separate bin.</p></div>
                   <div className="population-controls">
                     <label className="form-field compact-field"><span>Population column</span><select value={activePopulation?.column ?? ''} onChange={(e) => { const next = edaResult.population_comparison.find((item) => item.column === e.target.value); setPopulationColumn(e.target.value); setPopulationReference(next?.references[0]?.reference ?? ''); setPopulationComparison(next?.references[0]?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.references[0]?.comparisons[0]?.variables[0]?.column ?? '') }}>{edaResult.population_comparison.map((population) => <option key={population.column} value={population.column}>{population.column}</option>)}</select></label>
                     <label className="form-field compact-field"><span>Reference</span><select value={activeReference?.reference ?? ''} onChange={(e) => { const next = activePopulation?.references.find((item) => item.reference === e.target.value); setPopulationReference(e.target.value); setPopulationComparison(next?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.comparisons[0]?.variables[0]?.column ?? '') }}>{activePopulation?.references.map((reference) => <option key={reference.reference} value={reference.reference}>{reference.reference}</option>)}</select></label>
@@ -2458,10 +2458,10 @@ function App() {
         {discriminationError && <div className="message error-message">{discriminationError}</div>}
 
         <div className="discrimination-kpis">
-          <article className="metric-card"><span>ROC AUC</span><strong>{formatMetric(result.overall.auc)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
-          <article className="metric-card"><span>Gini</span><strong>{formatMetric(result.overall.gini)}</strong><small className="neutral">2 × AUC − 1</small></article>
-          <article className="metric-card"><span>KS</span><strong>{formatMetric(result.overall.ks)}</strong><small className="neutral">Max cumulative separation</small></article>
-          <article className="metric-card"><span>Bad capture @ 10%</span><strong>{result.overall.bad_capture_10 === null ? '—' : formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">ROC AUC {metricHelp('roc-auc', 'ROC AUC')}</span><strong>{formatMetric(result.overall.auc)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Gini {metricHelp('gini', 'Gini')}</span><strong>{formatMetric(result.overall.gini)}</strong><small className="neutral">2 × AUC − 1</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">KS {metricHelp('ks', 'KS')}</span><strong>{formatMetric(result.overall.ks)}</strong><small className="neutral">Max cumulative separation</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Bad capture @ 10% {metricHelp('bad-capture', 'Bad capture at 10%')}</span><strong>{result.overall.bad_capture_10 === null ? '—' : formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
           <article className="metric-card"><span>Default rate</span><strong>{formatPercent(result.overall.default_rate)}</strong><small className="neutral">Positive class: {validationConfig.positiveClass}</small></article>
         </div>
 
@@ -2470,7 +2470,7 @@ function App() {
           <article className="panel discrimination-chart"><div className="panel-title"><h2>KS cumulative curves</h2></div><EChart option={ksOption} height={380} /></article>
         </div>
 
-        <article className="panel discrimination-chart"><div className="panel-title"><div><h2>CAP / cumulative gains</h2><p className="eda-muted">Shows how quickly the riskiest observations capture observed defaults.</p></div></div><EChart option={capOption} height={390} /></article>
+        <article className="panel discrimination-chart"><div className="panel-title"><div><h2 className="heading-with-help">CAP / cumulative gains {metricHelp('cap', 'CAP / cumulative gains')}</h2><p className="eda-muted">Shows how quickly the riskiest observations capture observed defaults.</p></div></div><EChart option={capOption} height={390} /></article>
 
         {result.segment_performance.length > 0 && (
           <section className="panel discrimination-section segment-performance-section">
@@ -2709,7 +2709,7 @@ function App() {
           </div>
           <div className="table-wrap">
             <table className="calibration-summary-table">
-              <thead><tr><th>Segment</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean PD</th><th>Spiegelhalter p-value</th></tr></thead>
+              <thead><tr><th>Segment</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean PD</th><th><span className="metric-label-with-help">Spiegelhalter p-value {metricHelp('spiegelhalter', 'Spiegelhalter p-value')}</span></th></tr></thead>
               <tbody>{summaryRows.map((row) => (
                 <tr key={row.value}>
                   <td><strong>{row.value}</strong></td>
@@ -2726,14 +2726,14 @@ function App() {
         </section>
 
         <div className="calibration-kpis">
-          <article className="metric-card"><span>Brier score</span><strong>{formatMetric(result.overall.brier_score)}</strong><small className="neutral">Mean squared probability error</small></article>
-          <article className="metric-card"><span>O / E ratio</span><strong>{formatMetric(result.overall.oe_ratio)}</strong><small className="neutral">Observed / expected defaults</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Brier score {metricHelp('brier', 'Brier score')}</span><strong>{formatMetric(result.overall.brier_score)}</strong><small className="neutral">Mean squared probability error</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">O / E ratio {metricHelp('oe-ratio', 'Observed / Expected ratio')}</span><strong>{formatMetric(result.overall.oe_ratio)}</strong><small className="neutral">Observed / expected defaults</small></article>
           <article className="metric-card"><span>Expected defaults</span><strong>{formatMetric(result.overall.expected_defaults)}</strong><small className="neutral">Σ predicted PD</small></article>
-          <article className="metric-card"><span>Spiegelhalter Z</span><strong>{formatMetric(result.overall.spiegelhalter_z)}</strong><small className="neutral">Two-sided calibration test</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Spiegelhalter Z {metricHelp('spiegelhalter', 'Spiegelhalter Z-test')}</span><strong>{formatMetric(result.overall.spiegelhalter_z)}</strong><small className="neutral">Two-sided calibration test</small></article>
         </div>
 
         <section className="panel calibration-chart-section">
-          <div className="panel-title"><div><h2>Calibration curve</h2><p className="eda-muted">Ten equal-frequency PD bins. The dashed diagonal represents ideal calibration.</p></div></div>
+          <div className="panel-title"><div><h2 className="heading-with-help">Calibration curve {metricHelp('calibration-curve', 'Calibration curve')}</h2><p className="eda-muted">Ten equal-frequency PD bins. The dashed diagonal represents ideal calibration.</p></div></div>
           <EChart option={calibrationOption} height={440} />
           <div className="calibration-bin-strip">{calibrationBins.map((row) => <span key={row.bin}><strong>Bin {row.bin}</strong><small>PD {formatPercent(row.mean_pd)} · DR {formatPercent(row.observed_default_rate)} · n={row.observations.toLocaleString()}</small></span>)}</div>
         </section>
@@ -2949,10 +2949,10 @@ function App() {
         {activeComparison && (
           <>
             <section className="panel stability-summary-section">
-              <div className="panel-title"><div><h2>PSI summary</h2><p className="eda-muted">Default thresholds are heuristic: PSI &lt; 0.10 low, 0.10–0.25 moderate, &gt; 0.25 high.</p></div></div>
+              <div className="panel-title"><div><h2 className="heading-with-help">PSI summary {metricHelp('psi', 'Population Stability Index')}</h2><p className="eda-muted">Default thresholds are heuristic: PSI &lt; 0.10 low, 0.10–0.25 moderate, &gt; 0.25 high.</p></div></div>
               <div className="table-wrap">
                 <table className="stability-summary-table">
-                  <thead><tr><th>Variable</th><th>PSI</th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Variable</th><th><span className="metric-label-with-help">PSI {metricHelp('psi', 'Population Stability Index')}</span></th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
                   <tbody>{activeComparison.variables.map((variable) => (
                     <tr key={variable.column} className={activeVariable?.column === variable.column ? 'selected-row' : ''} onClick={() => setStabilityVariable(variable.column)}>
                       <td><strong>{variable.column}</strong><small>{variable.semantic_type}</small></td>
@@ -3068,7 +3068,8 @@ function App() {
         {activeSection === 'Discrimination' && renderDiscrimination()}
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && renderAnalysisPage(activeSection)}
+        {activeSection === 'Methodology' && renderMethodology()}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
