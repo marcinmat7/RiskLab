@@ -9,6 +9,7 @@ from app.dataset_io import MAX_ROWS, register_dataset
 from app.discrimination import run_discrimination
 from app.eda import run_eda
 from app.stability import run_stability
+from app.validation import run_validation
 
 app = FastAPI(title="RiskLab API", version="0.1.0")
 
@@ -126,6 +127,14 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, object]:
         "warning": warning,
         "max_rows": MAX_ROWS,
     }
+
+
+@app.post("/validation/run")
+async def validation_run(
+    dataset_id: str = Form(...),
+    config: str = Form(...),
+) -> dict[str, object]:
+    return await run_validation(dataset_id=dataset_id, config=config)
 
 
 @app.post("/eda/run")
