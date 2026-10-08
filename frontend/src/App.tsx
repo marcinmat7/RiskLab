@@ -744,6 +744,33 @@ function EChart({ option, height = 360, group }: { option: echarts.EChartsOption
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
+    if (activeSection !== 'Methodology' || !methodologyTarget) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(`methodology-${methodologyTarget}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeSection, methodologyTarget])
+
+  const openMethodology = (metric: string) => {
+    setMethodologyTarget(metric)
+    setMethodologySearch('')
+    setActiveSection('Methodology')
+  }
+
+  const metricHelp = (metric: string, label: string) => (
+    <button
+      type="button"
+      className="metric-help-button"
+      title={`Open methodology for ${label}`}
+      aria-label={`Open methodology for ${label}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        openMethodology(metric)
+      }}
+    >?</button>
+  )
+
+  useEffect(() => {
     if (!ref.current) return
     const chart = echarts.init(ref.current)
     if (group) {
@@ -809,6 +836,8 @@ function MiniLineChart({ data, valueSuffix = '' }: { data: { label: string; valu
 
 function App() {
   const [activeSection, setActiveSection] = useState<Section>('Overview')
+  const [methodologySearch, setMethodologySearch] = useState('')
+  const [methodologyTarget, setMethodologyTarget] = useState('')
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -1322,6 +1351,114 @@ function App() {
       setStabilityError(err instanceof Error ? err.message : 'Stability analysis failed.')
       setAnalysisStatus((current) => ({ ...current, Stability: 'failed' }))
     }
+  }
+
+  const renderMethodology = () => {
+    const query = methodologySearch.trim().toLowerCase()
+    const filtered = methodologyEntries.filter((entry) => {
+      if (!query) return true
+      return [entry.title, entry.group, entry.summary, ...entry.aliases, ...entry.related]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    })
+
+    const visibleGroups = methodologyGroups
+      .map((group) => ({ group, entries: filtered.filter((entry) => entry.group === group) }))
+      .filter((item) => item.entries.length > 0)
+
+    return (
+      <section className="page-content methodology-page">
+        <div className="analysis-page-header">
+          <div>
+            <p className="eyebrow">Reference</p>
+            <h1>Methodology</h1>
+            <p>Definitions, interpretation, implementation details and limitations for metrics used across RiskLab.</p>
+          </div>
+        </div>
+
+        <section className="panel methodology-search-card">
+          <div>
+            <h2>Metric reference</h2>
+            <p>Search by metric name, abbreviation or concept. Help icons across RiskLab link directly to these entries.</p>
+          </div>
+          <input
+            className="methodology-search"
+            value={methodologySearch}
+            onChange={(event) => setMethodologySearch(event.target.value)}
+            placeholder="Search AUC, PSI, Spiegelhalter, correlation…"
+          />
+        </section>
+
+        <div className="methodology-layout">
+          <aside className="panel methodology-index">
+            <strong>Contents</strong>
+            {methodologyGroups.map((group) => (
+              <div key={group}>
+                <span>{group}</span>
+                {methodologyEntries.filter((entry) => entry.group === group).map((entry) => (
+                  <button key={entry.id} onClick={() => {
+                    setMethodologySearch('')
+                    setMethodologyTarget(entry.id)
+                    window.setTimeout(() => document.getElementById(`methodology-${entry.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+                  }}>{entry.title}</button>
+                ))}
+              </div>
+            ))}
+          </aside>
+
+          <div className="methodology-content">
+            {visibleGroups.map(({ group, entries }) => (
+              <section key={group} className="methodology-group">
+                <div className="methodology-group-heading"><p className="eyebrow">{group}</p><h2>{group} metrics</h2></div>
+                {entries.map((entry) => (
+                  <article id={`methodology-${entry.id}`} className="panel methodology-entry" key={entry.id}>
+                    <div className="methodology-entry-head">
+                      <div><h3>{entry.title}</h3><p>{entry.summary}</p></div>
+                      <span className="methodology-anchor">#{entry.id}</span>
+                    </div>
+
+                    {entry.formula && (
+                      <div className="methodology-block">
+                        <h4>Formula</h4>
+                        <code>{entry.formula}</code>
+                      </div>
+                    )}
+
+                    <div className="methodology-columns">
+                      <div className="methodology-block">
+                        <h4>Interpretation</h4>
+                        <ul>{entry.interpretation.map((item) => <li key={item}>{item}</li>)}</ul>
+                      </div>
+                      <div className="methodology-block">
+                        <h4>RiskLab implementation</h4>
+                        <ul>{entry.implementation.map((item) => <li key={item}>{item}</li>)}</ul>
+                      </div>
+                    </div>
+
+                    <div className="methodology-block methodology-limitations">
+                      <h4>Important limitations</h4>
+                      <ul>{entry.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+                    </div>
+
+                    {entry.related.length > 0 && (
+                      <div className="methodology-related">
+                        <span>Related</span>
+                        {entry.related.map((related) => {
+                          const target = methodologyEntries.find((item) => item.id === related)
+                          return target ? <button key={related} onClick={() => openMethodology(related)}>{target.title}</button> : null
+                        })}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </section>
+            ))}
+            {visibleGroups.length === 0 && <div className="panel eda-no-data">No methodology entries match “{methodologySearch}”.</div>}
+          </div>
+        </div>
+      </section>
+    )
   }
 
   const renderDataPage = () => (
