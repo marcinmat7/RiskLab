@@ -9,7 +9,9 @@ type PreviewRow = {
 }
 
 type DatasetPreview = {
+  dataset_id: string
   filename: string
+  file_format: string
   file_size_bytes: number | null
   row_count: number
   column_count: number
@@ -17,7 +19,7 @@ type DatasetPreview = {
   column_types: Record<string, PhysicalType>
   first_preview: PreviewRow[]
   random_preview: PreviewRow[]
-  delimiter: string
+  delimiter: string | null
   warning: string | null
   max_rows: number
 }
@@ -843,7 +845,7 @@ function App() {
     formData.append('file', selectedFile)
 
     try {
-      const response = await fetch('http://localhost:8000/datasets/preview', { method: 'POST', body: formData })
+      const response = await fetch('http://localhost:8000/datasets/upload', { method: 'POST', body: formData })
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
       const dataset = body as DatasetPreview
@@ -894,13 +896,13 @@ function App() {
 
 
   const runEda = async () => {
-    if (!selectedFile || !validationReady) return
+    if (!preview || !validationReady) return
 
     setAnalysisStatus((current) => ({ ...current, EDA: 'running' }))
     setEdaError(null)
 
     const formData = new FormData()
-    formData.append('file', selectedFile)
+    formData.append('dataset_id', preview.dataset_id)
     formData.append('config', JSON.stringify(validationConfig))
     formData.append('time_granularity', timeGranularity)
 
@@ -937,12 +939,12 @@ function App() {
 
 
   const runDiscrimination = async () => {
-    if (!selectedFile || !validationReady) return
+    if (!preview || !validationReady) return
     setAnalysisStatus((current) => ({ ...current, Discrimination: 'running' }))
     setDiscriminationError(null)
 
     const formData = new FormData()
-    formData.append('file', selectedFile)
+    formData.append('dataset_id', preview.dataset_id)
     formData.append('config', JSON.stringify(validationConfig))
     formData.append('time_granularity', discriminationGranularity)
 
@@ -963,12 +965,12 @@ function App() {
   }
 
   const runCalibration = async () => {
-    if (!selectedFile || !validationReady || validationConfig.predictionType !== 'pd') return
+    if (!preview || !validationReady || validationConfig.predictionType !== 'pd') return
     setAnalysisStatus((current) => ({ ...current, Calibration: 'running' }))
     setCalibrationError(null)
 
     const formData = new FormData()
-    formData.append('file', selectedFile)
+    formData.append('dataset_id', preview.dataset_id)
     formData.append('config', JSON.stringify(validationConfig))
 
     try {
@@ -988,12 +990,12 @@ function App() {
   }
 
   const runStability = async () => {
-    if (!selectedFile || !validationReady) return
+    if (!preview || !validationReady) return
     setAnalysisStatus((current) => ({ ...current, Stability: 'running' }))
     setStabilityError(null)
 
     const formData = new FormData()
-    formData.append('file', selectedFile)
+    formData.append('dataset_id', preview.dataset_id)
     formData.append('config', JSON.stringify(validationConfig))
 
     try {
@@ -1032,20 +1034,20 @@ function App() {
       <section className="panel upload-panel upload-workflow">
         <div className="upload-copy">
           <h2>Validation dataset</h2>
-          <p>CSV only for MVP v0.1. UTF-8 encoding is supported. Maximum 1,000,000 data rows.</p>
+          <p>CSV, TSV, Parquet and Feather. CSV automatically detects comma, semicolon, tab or pipe separators. Maximum 1,000,000 data rows.</p>
         </div>
 
         {!selectedFile ? (
-          <label className="primary-button upload-button"><input type="file" accept=".csv,text/csv" onChange={handleFileChange} />Choose CSV</label>
+          <label className="primary-button upload-button"><input type="file" accept=".csv,.tsv,.parquet,.feather,text/csv,text/tab-separated-values,application/vnd.apache.parquet,application/octet-stream" onChange={handleFileChange} />Choose CSV</label>
         ) : (
           <div className="selected-file-card">
             <div className="file-details">
-              <span className="file-icon">CSV</span>
+              <span className="file-icon">{selectedFile.name.split('.').pop()?.toUpperCase() ?? 'DATA'}</span>
               <div><strong>{selectedFile.name}</strong><span>{formatFileSize(selectedFile.size)}</span></div>
             </div>
             <div className={`upload-state ${uploadStatus}`}><span className="state-dot" />{uploadStatus === 'selected' && 'Ready to upload'}{uploadStatus === 'uploading' && 'Uploading…'}{uploadStatus === 'ready' && 'Ready'}{uploadStatus === 'error' && 'Upload failed'}</div>
             <div className="file-actions">
-              <label className={`secondary-button compact-button ${uploadStatus === 'uploading' ? 'disabled' : ''}`}><input type="file" accept=".csv,text/csv" onChange={handleFileChange} disabled={uploadStatus === 'uploading'} />Replace</label>
+              <label className={`secondary-button compact-button ${uploadStatus === 'uploading' ? 'disabled' : ''}`}><input type="file" accept=".csv,.tsv,.parquet,.feather,text/csv,text/tab-separated-values,application/vnd.apache.parquet,application/octet-stream" onChange={handleFileChange} disabled={uploadStatus === 'uploading'} />Replace</label>
               <button className="secondary-button compact-button" onClick={removeFile} disabled={uploadStatus === 'uploading'}>Remove</button>
               <button className="primary-button compact-button" onClick={uploadFile} disabled={uploadStatus === 'uploading'}>{uploadStatus === 'uploading' ? 'Uploading…' : uploadStatus === 'ready' ? 'Upload again' : 'Upload'}</button>
             </div>
@@ -1059,7 +1061,7 @@ function App() {
       {preview && (
         <section className="panel preview-section">
           <div className="preview-header">
-            <div><p className="eyebrow">Dataset preview</p><h2>{preview.filename}</h2><p className="preview-meta">Delimiter: <code>{preview.delimiter === '\t' ? 'tab' : preview.delimiter}</code> · Limit: {preview.max_rows.toLocaleString()} rows</p></div>
+            <div><p className="eyebrow">Dataset preview</p><h2>{preview.filename}</h2><p className="preview-meta">Format: <code>{preview.file_format}</code>{preview.delimiter ? <> · Delimiter: <code>{preview.delimiter === '\t' ? 'tab' : preview.delimiter}</code></> : null} · Limit: {preview.max_rows.toLocaleString()} rows</p></div>
             <div className="dataset-stats"><div><span>Rows</span><strong>{preview.row_count.toLocaleString()}</strong></div><div><span>Columns</span><strong>{preview.column_count}</strong></div></div>
           </div>
           <div className="preview-block">
