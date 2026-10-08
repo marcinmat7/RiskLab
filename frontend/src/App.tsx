@@ -114,6 +114,15 @@ type EdaProfile = {
     cdf: { x: number; cdf: number }[]
   }
   categories?: { value: string; count: number; share: number }[]
+  univariate_auc: number | null
+  auc_direction: 'higher-is-riskier' | 'lower-is-riskier' | 'category-logit' | null
+  category_logits: {
+    value: string
+    count: number
+    defaults: number
+    default_rate: number
+    logit: number
+  }[]
   uniqueness_rate?: number | null
   text_summary?: { mean_length: number; median_length: number; max_length: number }
 }
@@ -606,7 +615,10 @@ function App() {
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
   const [edaError, setEdaError] = useState<string | null>(null)
   const [edaTab, setEdaTab] = useState<EdaTab>('Overview')
-  const [edaColumn, setEdaColumn] = useState<string>('')
+  const [distributionFilter, setDistributionFilter] = useState<'all' | 'numeric' | 'categorical' | 'other'>('all')
+  const [distributionSearch, setDistributionSearch] = useState('')
+  const [distributionSort, setDistributionSort] = useState<'dataset' | 'missing' | 'auc' | 'name'>('dataset')
+  const [distributionDetailColumn, setDistributionDetailColumn] = useState('')
   const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
   const [edaTimeMissingColumn, setEdaTimeMissingColumn] = useState<string>('')
   const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
@@ -674,7 +686,10 @@ function App() {
     setEdaResult(null)
     setEdaError(null)
     setEdaTab('Overview')
-    setEdaColumn('')
+    setDistributionFilter('all')
+    setDistributionSearch('')
+    setDistributionSort('dataset')
+    setDistributionDetailColumn('')
     setEdaTimeVariable('')
     setEdaTimeMissingColumn('')
     setQualitySort('missing')
@@ -727,7 +742,7 @@ function App() {
     setStabilityComparison('')
     setStabilityVariable('')
     setEdaTab('Overview')
-    setEdaColumn('')
+    setDistributionDetailColumn('')
     setPopulationColumn('')
     setPopulationReference('')
     setPopulationComparison('')
@@ -991,7 +1006,6 @@ function App() {
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
       const result = body as EdaResult
       setEdaResult(result)
-      setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
       setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
       setEdaTimeMissingColumn((current) => current || result.profiles.find((profile) => profile.missing_count > 0)?.column || result.profiles[0]?.column || '')
       const firstPopulation = result.population_comparison[0]
@@ -1322,7 +1336,7 @@ function App() {
       return (
         <section className="page-content analysis-module-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic data profiling based on the semantic column types configured in Validation.</p></div>
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Profile data structure, distributions and quality, with optional target-aware univariate diagnostics.</p></div>
             <div className="analysis-status-pill blocked"><span />Blocked</div>
           </div>
           <section className="panel analysis-run-card">
@@ -1336,7 +1350,6 @@ function App() {
     }
 
     const status = analysisStatus.EDA
-    const activeProfile = edaResult?.profiles.find((profile) => profile.column === edaColumn)
     const tabs: EdaTab[] = ['Overview', 'Data quality', 'Distributions', 'Relationships', 'Population comparison', 'Time analysis', 'Missingness']
     const populationEnabled = validationConfig.populationColumns.length > 0
     const timeEnabled = Boolean(validationConfig.timeColumn)
@@ -1345,7 +1358,7 @@ function App() {
       return (
         <section className="page-content eda-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic profiling only — no credit-risk-specific interpretation is applied here.</p></div>
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Explore data quality and distributions. Univariate AUC is shown as descriptive target-aware context, not as model validation evidence.</p></div>
             <div className="eda-header-actions">
               <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
               <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
@@ -1436,6 +1449,38 @@ function App() {
         lineStyle: { width: 2, color: '#6ea8ff' },
       }],
     })
+
+    const distributionProfiles = edaResult.profiles
+      .filter((profile) => profile.semantic_type !== 'ignore')
+      .filter((profile) => {
+        if (distributionFilter === 'numeric') return ['continuous', 'ordinal'].includes(profile.semantic_type)
+        if (distributionFilter === 'categorical') return ['categorical', 'boolean'].includes(profile.semantic_type)
+        if (distributionFilter === 'other') return ['identifier', 'datetime', 'text'].includes(profile.semantic_type)
+        return true
+      })
+      .filter((profile) => profile.column.toLowerCase().includes(distributionSearch.trim().toLowerCase()))
+
+    const distributionOrder = new Map(edaResult.profiles.map((profile, index) => [profile.column, index]))
+    distributionProfiles.sort((a, b) => {
+      if (distributionSort === 'missing') return b.missing_rate - a.missing_rate
+      if (distributionSort === 'auc') return (b.univariate_auc ?? -1) - (a.univariate_auc ?? -1)
+      if (distributionSort === 'name') return a.column.localeCompare(b.column)
+      return (distributionOrder.get(a.column) ?? 0) - (distributionOrder.get(b.column) ?? 0)
+    })
+
+    const distributionDetailProfile = edaResult.profiles.find((profile) => profile.column === distributionDetailColumn)
+
+    const miniBars = (profile: EdaProfile) => {
+      const values = profile.numeric_summary
+        ? profile.numeric_summary.histogram.map((item) => item.count)
+        : (profile.categories ?? []).slice(0, 8).map((item) => item.count)
+      const max = Math.max(1, ...values)
+      return (
+        <div className="distribution-mini-bars" aria-hidden="true">
+          {values.map((value, index) => <span key={index} style={{ height: `${Math.max(5, value / max * 100)}%` }} />)}
+        </div>
+      )
+    }
 
     const relationshipLookup = new Map(
       edaResult.relationships.flatMap((item) => [
@@ -1658,43 +1703,122 @@ function App() {
             )}
 
             {edaTab === 'Distributions' && (
-              <section className="panel eda-section">
-                <div className="eda-control-row">
-                  <div><h2>Column explorer</h2><p>Numeric and categorical distributions include a separate Missing bucket. Log view uses a logarithmic count axis.</p></div>
-                  <label className="form-field compact-field"><span>Column</span><select value={edaColumn} onChange={(e) => setEdaColumn(e.target.value)}>{edaResult.profiles.filter((profile) => profile.semantic_type !== 'ignore').map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
-                </div>
-                {activeProfile && (
-                  <div className="eda-column-explorer">
-                    <div className="eda-inline-stats">
-                      <div><span>Type</span><strong>{activeProfile.semantic_type}</strong></div>
-                      <div><span>Missing</span><strong>{formatPercent(activeProfile.missing_rate)}</strong></div>
-                      <div><span>Unique</span><strong>{activeProfile.unique_count_capped ? '>10k' : (activeProfile.unique_count ?? '—')}</strong></div>
+              <section className="panel eda-section distribution-gallery-section">
+                <div className="eda-control-row distribution-gallery-header">
+                  <div>
+                    <h2>Distribution gallery</h2>
+                    <p>Scan all variables at once. Univariate AUC uses the configured default target and the EDA sample; click any card for a detailed view.</p>
+                  </div>
+                  <div className="distribution-gallery-controls">
+                    <div className="segmented-control">
+                      <button className={distributionFilter === 'all' ? 'active' : ''} onClick={() => setDistributionFilter('all')}>All</button>
+                      <button className={distributionFilter === 'numeric' ? 'active' : ''} onClick={() => setDistributionFilter('numeric')}>Numeric</button>
+                      <button className={distributionFilter === 'categorical' ? 'active' : ''} onClick={() => setDistributionFilter('categorical')}>Categorical</button>
+                      <button className={distributionFilter === 'other' ? 'active' : ''} onClick={() => setDistributionFilter('other')}>Other</button>
                     </div>
-                    {activeProfile.numeric_summary && (
-                      <>
-                        <div className="eda-inline-stats wide">
-                          <div><span>Mean</span><strong>{formatMetric(activeProfile.numeric_summary.mean)}</strong></div>
-                          <div><span>Median</span><strong>{formatMetric(activeProfile.numeric_summary.median)}</strong></div>
-                          <div><span>Std</span><strong>{formatMetric(activeProfile.numeric_summary.std)}</strong></div>
-                          <div><span>P25</span><strong>{formatMetric(activeProfile.numeric_summary.p25)}</strong></div>
-                          <div><span>P75</span><strong>{formatMetric(activeProfile.numeric_summary.p75)}</strong></div>
-                          <div><span>Min / max</span><strong>{formatMetric(activeProfile.numeric_summary.min)} / {formatMetric(activeProfile.numeric_summary.max)}</strong></div>
-                        </div>
-                        <div className="eda-chart-grid distribution-grid">
-                          <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
-                          <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
-                        </div>
-                        <article className="eda-chart-panel cdf-panel"><div><h3>Empirical cumulative distribution</h3><p className="eda-muted">CDF is calculated from the EDA reservoir sample.</p></div><EChart option={cdfOption(activeProfile)} height={390} /></article>
-                      </>
-                    )}
-                    {activeProfile.categories && (
-                      <div className="eda-chart-grid distribution-grid">
-                        <article className="eda-chart-panel"><h3>Category counts · linear scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
-                        <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
+                    <input className="relationship-search" value={distributionSearch} onChange={(e) => setDistributionSearch(e.target.value)} placeholder="Search variables…" />
+                    <label className="form-field compact-field"><span>Sort by</span><select value={distributionSort} onChange={(e) => setDistributionSort(e.target.value as 'dataset' | 'missing' | 'auc' | 'name')}><option value="dataset">Dataset order</option><option value="missing">Missing rate</option><option value="auc">Univariate AUC</option><option value="name">Name</option></select></label>
+                  </div>
+                </div>
+
+                <div className="distribution-card-grid">
+                  {distributionProfiles.map((profile) => (
+                    <button
+                      type="button"
+                      className="distribution-card"
+                      key={profile.column}
+                      onClick={() => setDistributionDetailColumn(profile.column)}
+                    >
+                      <div className="distribution-card-head">
+                        <div><strong>{profile.column}</strong><span>{profile.semantic_type}</span></div>
+                        {profile.univariate_auc !== null && <span className="distribution-auc">AUC {profile.univariate_auc.toFixed(3)}</span>}
                       </div>
-                    )}
-                    {activeProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{activeProfile.uniqueness_rate === null || activeProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(activeProfile.uniqueness_rate)}</strong></div>}
-                    {activeProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(activeProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(activeProfile.text_summary.median_length)}</strong>, max <strong>{activeProfile.text_summary.max_length}</strong>.</div>}
+
+                      {(profile.numeric_summary || profile.categories) ? miniBars(profile) : (
+                        <div className="distribution-card-placeholder">{profile.semantic_type === 'identifier' ? 'Identifier' : profile.semantic_type === 'text' ? 'Text' : 'No histogram'}</div>
+                      )}
+
+                      {profile.numeric_summary && (
+                        <div className="distribution-card-stats">
+                          <span><b>Mean</b>{formatMetric(profile.numeric_summary.mean)}</span>
+                          <span><b>Median</b>{formatMetric(profile.numeric_summary.median)}</span>
+                          <span><b>Range</b>{formatMetric(profile.numeric_summary.min)}–{formatMetric(profile.numeric_summary.max)}</span>
+                          <span><b>Missing</b>{formatPercent(profile.missing_rate)}</span>
+                        </div>
+                      )}
+
+                      {profile.categories && (
+                        <div className="distribution-card-stats">
+                          <span><b>Unique</b>{profile.unique_count_capped ? '>10k' : (profile.unique_count ?? '—')}</span>
+                          <span><b>Top share</b>{profile.categories[0] ? formatPercent(profile.categories[0].share) : '—'}</span>
+                          <span><b>Missing</b>{formatPercent(profile.missing_rate)}</span>
+                          <span><b>Logit AUC</b>{profile.univariate_auc === null ? '—' : profile.univariate_auc.toFixed(3)}</span>
+                        </div>
+                      )}
+
+                      {profile.semantic_type === 'identifier' && <div className="distribution-card-stats"><span><b>Unique</b>{profile.unique_count_capped ? '>10k' : (profile.unique_count ?? '—')}</span><span><b>Missing</b>{formatPercent(profile.missing_rate)}</span></div>}
+                      {profile.text_summary && <div className="distribution-card-stats"><span><b>Mean length</b>{formatMetric(profile.text_summary.mean_length)}</span><span><b>Max length</b>{profile.text_summary.max_length}</span><span><b>Missing</b>{formatPercent(profile.missing_rate)}</span></div>}
+                    </button>
+                  ))}
+                </div>
+
+                {distributionProfiles.length === 0 && <div className="eda-no-data">No variables match the current distribution filters.</div>}
+
+                {distributionDetailProfile && (
+                  <div className="distribution-modal-backdrop" role="presentation" onClick={() => setDistributionDetailColumn('')}>
+                    <div className="distribution-modal" role="dialog" aria-modal="true" aria-label={`Distribution details for ${distributionDetailProfile.column}`} onClick={(event) => event.stopPropagation()}>
+                      <div className="distribution-modal-head">
+                        <div><p className="eyebrow">Distribution detail</p><h2>{distributionDetailProfile.column}</h2><p>{distributionDetailProfile.semantic_type} · sample n={edaResult.sample_size.toLocaleString()}</p></div>
+                        <button className="secondary-button compact-button" onClick={() => setDistributionDetailColumn('')}>Close</button>
+                      </div>
+
+                      <div className="eda-inline-stats">
+                        <div><span>Type</span><strong>{distributionDetailProfile.semantic_type}</strong></div>
+                        <div><span>Missing</span><strong>{formatPercent(distributionDetailProfile.missing_rate)}</strong></div>
+                        <div><span>Unique</span><strong>{distributionDetailProfile.unique_count_capped ? '>10k' : (distributionDetailProfile.unique_count ?? '—')}</strong></div>
+                        <div><span>Univariate AUC</span><strong>{distributionDetailProfile.univariate_auc === null ? '—' : distributionDetailProfile.univariate_auc.toFixed(3)}</strong></div>
+                      </div>
+
+                      {distributionDetailProfile.numeric_summary && (
+                        <>
+                          <div className="eda-inline-stats wide">
+                            <div><span>Mean</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.mean)}</strong></div>
+                            <div><span>Median</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.median)}</strong></div>
+                            <div><span>Std</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.std)}</strong></div>
+                            <div><span>P25</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.p25)}</strong></div>
+                            <div><span>P75</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.p75)}</strong></div>
+                            <div><span>Min / max</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.min)} / {formatMetric(distributionDetailProfile.numeric_summary.max)}</strong></div>
+                          </div>
+                          <div className="eda-info-card">AUC direction: <strong>{distributionDetailProfile.auc_direction === 'lower-is-riskier' ? 'lower values are riskier' : 'higher values are riskier'}</strong>. The displayed AUC is direction-normalized to be at least 0.5 and is calculated on the EDA sample.</div>
+                          <div className="eda-chart-grid distribution-grid">
+                            <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(distributionDetailProfile, false)} /></article>
+                            <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(distributionDetailProfile, true)} /></article>
+                          </div>
+                          <article className="eda-chart-panel cdf-panel"><div><h3>Empirical cumulative distribution</h3><p className="eda-muted">CDF is calculated from the EDA reservoir sample.</p></div><EChart option={cdfOption(distributionDetailProfile)} height={390} /></article>
+                        </>
+                      )}
+
+                      {distributionDetailProfile.categories && (
+                        <>
+                          <div className="eda-chart-grid distribution-grid">
+                            <article className="eda-chart-panel"><h3>Category counts · linear scale</h3><EChart option={histogramOption(distributionDetailProfile, false)} /></article>
+                            <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(distributionDetailProfile, true)} /></article>
+                          </div>
+                          <div className="category-logit-section">
+                            <div><h3>Category logit diagnostics</h3><p className="eda-muted">Each category is scored with its smoothed observed default-rate logit. The variable-level AUC measures how well those category logits rank the configured target. This is an in-sample descriptive diagnostic and can be optimistic for high-cardinality variables.</p></div>
+                            <div className="table-wrap">
+                              <table>
+                                <thead><tr><th>Category</th><th>Count</th><th>Defaults</th><th>Default rate</th><th>Smoothed logit</th></tr></thead>
+                                <tbody>{distributionDetailProfile.category_logits.map((row) => <tr key={row.value}><td><strong>{row.value}</strong></td><td>{row.count.toLocaleString()}</td><td>{row.defaults.toLocaleString()}</td><td>{formatPercent(row.default_rate)}</td><td>{row.logit.toFixed(3)}</td></tr>)}</tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {distributionDetailProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{distributionDetailProfile.uniqueness_rate === null || distributionDetailProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(distributionDetailProfile.uniqueness_rate)}</strong></div>}
+                      {distributionDetailProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(distributionDetailProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(distributionDetailProfile.text_summary.median_length)}</strong>, max <strong>{distributionDetailProfile.text_summary.max_length}</strong>.</div>}
+                    </div>
                   </div>
                 )}
               </section>
