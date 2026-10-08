@@ -1336,7 +1336,7 @@ function App() {
       return (
         <section className="page-content analysis-module-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic data profiling based on the semantic column types configured in Validation.</p></div>
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Profile data structure, distributions and quality, with optional target-aware univariate diagnostics.</p></div>
             <div className="analysis-status-pill blocked"><span />Blocked</div>
           </div>
           <section className="panel analysis-run-card">
@@ -1358,7 +1358,7 @@ function App() {
       return (
         <section className="page-content eda-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic profiling only — no credit-risk-specific interpretation is applied here.</p></div>
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Explore data quality and distributions. Univariate AUC is shown as descriptive target-aware context, not as model validation evidence.</p></div>
             <div className="eda-header-actions">
               <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
               <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
@@ -1789,7 +1789,7 @@ function App() {
                             <div><span>P75</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.p75)}</strong></div>
                             <div><span>Min / max</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.min)} / {formatMetric(distributionDetailProfile.numeric_summary.max)}</strong></div>
                           </div>
-                          <div className="eda-info-card">AUC direction: <strong>{distributionDetailProfile.auc_direction === 'lower-is-riskier' ? 'lower values are riskier' : 'higher values are riskier'}</strong>. The displayed AUC is direction-normalized to be at least 0.5.</div>
+                          <div className="eda-info-card">AUC direction: <strong>{distributionDetailProfile.auc_direction === 'lower-is-riskier' ? 'lower values are riskier' : 'higher values are riskier'}</strong>. The displayed AUC is direction-normalized to be at least 0.5 and is calculated on the EDA sample.</div>
                           <div className="eda-chart-grid distribution-grid">
                             <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(distributionDetailProfile, false)} /></article>
                             <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(distributionDetailProfile, true)} /></article>
@@ -1805,7 +1805,7 @@ function App() {
                             <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(distributionDetailProfile, true)} /></article>
                           </div>
                           <div className="category-logit-section">
-                            <div><h3>Category logit diagnostics</h3><p className="eda-muted">Each category is scored with its smoothed observed default-rate logit. The variable-level AUC measures how well those category logits rank the configured target.</p></div>
+                            <div><h3>Category logit diagnostics</h3><p className="eda-muted">Each category is scored with its smoothed observed default-rate logit. The variable-level AUC measures how well those category logits rank the configured target. This is an in-sample descriptive diagnostic and can be optimistic for high-cardinality variables.</p></div>
                             <div className="table-wrap">
                               <table>
                                 <thead><tr><th>Category</th><th>Count</th><th>Defaults</th><th>Default rate</th><th>Smoothed logit</th></tr></thead>
