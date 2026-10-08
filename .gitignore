@@ -16,3 +16,7 @@ frontend/dist/
 .vscode/
 .idea/
 .DS_Store
+
+
+# RiskLab local dataset cache
+backend/.risklab_data/
