@@ -62,6 +62,34 @@ type ValidationConfigMessage = {
   details: string[]
 }
 
+type ValidationParsingWarning = {
+  column: string
+  detected_physical_type: PhysicalType
+  requested_semantic_type: SemanticType
+  effective_semantic_type: SemanticType
+  non_missing_count: number
+  invalid_count: number
+  invalid_examples: string[]
+  status: 'warning'
+  message: string
+}
+
+type ValidationRunResult = {
+  status: 'ok' | 'warning'
+  effective_semantic_types: Record<string, SemanticType>
+  column_results: {
+    column: string
+    detected_physical_type: PhysicalType
+    requested_semantic_type: SemanticType
+    effective_semantic_type: SemanticType
+    non_missing_count: number
+    invalid_count: number
+    invalid_examples: string[]
+    status: 'ok' | 'warning'
+  }[]
+  warnings: ValidationParsingWarning[]
+}
+
 type EdaTab = 'Overview' | 'Data quality' | 'Distributions' | 'Relationships' | 'Population comparison' | 'Time analysis' | 'Missingness'
 type TimeGranularity = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
 
@@ -610,6 +638,8 @@ function App() {
   const [stabilityVariable, setStabilityVariable] = useState('')
   const [stabilityGranularity, setStabilityGranularity] = useState<TimeGranularity>('monthly')
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
+  const [validationParsingWarnings, setValidationParsingWarnings] = useState<ValidationParsingWarning[]>([])
+  const [validationRunError, setValidationRunError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -675,6 +705,8 @@ function App() {
     setStabilityVariable('')
     setStabilityGranularity('monthly')
     setValidationConfigMessage(null)
+    setValidationParsingWarnings([])
+    setValidationRunError(null)
   }
 
   const invalidateAnalysisResults = () => {
@@ -703,6 +735,8 @@ function App() {
     setTimeWorkspace([])
     setDiscriminationSegmentKey('')
     setDiscriminationTimeSegmentKey('overall')
+    setValidationParsingWarnings([])
+    setValidationRunError(null)
   }
 
   const exportValidationConfig = () => {
@@ -892,6 +926,51 @@ function App() {
       })
       setLastRun((current) => ({ ...current, [section]: new Date().toLocaleString() }))
     }, 650)
+  }
+
+
+  const runValidation = async () => {
+    if (!preview || !requiredConfigReady) return
+
+    setAnalysisStatus((current) => ({ ...current, Validation: 'running' }))
+    setValidationRunError(null)
+    setValidationParsingWarnings([])
+
+    const formData = new FormData()
+    formData.append('dataset_id', preview.dataset_id)
+    formData.append('config', JSON.stringify(validationConfig))
+
+    try {
+      const response = await fetch('http://localhost:8000/validation/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as ValidationRunResult
+
+      setValidationConfig((current) => ({
+        ...current,
+        semanticTypes: {
+          ...current.semanticTypes,
+          ...result.effective_semantic_types,
+        },
+      }))
+      setValidationParsingWarnings(result.warnings)
+
+      setAnalysisStatus((current) => {
+        const next = { ...current, Validation: 'ready' as AnalysisStatus }
+        analysisSections.forEach((item) => {
+          if (item !== 'Validation') {
+            next[item] = item === 'Calibration' && validationConfig.predictionType === 'score'
+              ? 'unavailable'
+              : 'not-run'
+          }
+        })
+        return next
+      })
+      setLastRun((current) => ({ ...current, Validation: new Date().toLocaleString() }))
+    } catch (err) {
+      setValidationRunError(err instanceof Error ? err.message : 'Validation failed.')
+      setAnalysisStatus((current) => ({ ...current, Validation: 'failed' }))
+    }
   }
 
 
@@ -1115,6 +1194,8 @@ function App() {
           </div>
         </div>
 
+        {validationRunError && <div className="message error-message">{validationRunError}</div>}
+
         {validationConfigMessage && (
           <div className={`validation-config-message ${validationConfigMessage.tone}`}>
             <div><strong>{validationConfigMessage.title}</strong><button type="button" onClick={() => setValidationConfigMessage(null)} aria-label="Dismiss">×</button></div>
@@ -1165,7 +1246,25 @@ function App() {
               </div>
             ))}
           </div>
-          <div className="type-note">Detected types are suggestions only. RiskLab never infers business meaning from a column name; the semantic type remains under user control.</div>
+          <div className="type-note">Detected types are suggestions only. RiskLab never infers business meaning from a column name. On Run validation, incompatible semantic types fall back to the detected physical type and are reported as warnings.</div>
+          {validationParsingWarnings.length > 0 && (
+            <div className="validation-parsing-warnings">
+              <div className="validation-parsing-warnings-head">
+                <strong>Semantic type parsing warnings</strong>
+                <span>{validationParsingWarnings.length} column{validationParsingWarnings.length === 1 ? '' : 's'} adjusted</span>
+              </div>
+              {validationParsingWarnings.map((warning) => (
+                <div className="validation-parsing-warning" key={warning.column}>
+                  <div>
+                    <strong>{warning.column}</strong>
+                    <span>{warning.requested_semantic_type} → {warning.effective_semantic_type}</span>
+                  </div>
+                  <p>{warning.message}</p>
+                  {warning.invalid_examples.length > 0 && <small>Examples: {warning.invalid_examples.map((value) => `"${value}"`).join(', ')}</small>}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="panel setup-card optional-card">
@@ -1209,7 +1308,7 @@ function App() {
 
         <div className="run-footer">
           <div><strong>{requiredConfigReady ? 'Configuration ready' : 'Complete the required fields'}</strong><span>{requiredConfigReady ? 'RiskLab can now run structural validation.' : 'Choose model output, target and default class to continue.'}</span></div>
-          <button className="primary-button run-button" disabled={!requiredConfigReady || analysisStatus.Validation === 'running'} onClick={() => runAnalysis('Validation')}>{analysisStatus.Validation === 'running' ? 'Running…' : analysisStatus.Validation === 'ready' ? 'Run validation again' : 'Run validation'}</button>
+          <button className="primary-button run-button" disabled={!requiredConfigReady || analysisStatus.Validation === 'running'} onClick={runValidation}>{analysisStatus.Validation === 'running' ? 'Running…' : analysisStatus.Validation === 'ready' ? 'Run validation again' : 'Run validation'}</button>
         </div>
       </section>
     )
