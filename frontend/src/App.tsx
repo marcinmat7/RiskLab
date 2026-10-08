@@ -1028,7 +1028,7 @@ function App() {
   const renderDataPage = () => (
     <section className="page-content">
       <div className="page-heading compact-heading">
-        <div><p className="eyebrow">Dataset</p><h1>Upload validation data</h1><p>Select a CSV, review the file details, then upload it for structural inspection.</p></div>
+        <div><p className="eyebrow">Dataset</p><h1>Upload validation data</h1><p>Select a dataset file, review the file details, then upload it for structural inspection.</p></div>
       </div>
 
       <section className="panel upload-panel upload-workflow">
@@ -1038,7 +1038,7 @@ function App() {
         </div>
 
         {!selectedFile ? (
-          <label className="primary-button upload-button"><input type="file" accept=".csv,.tsv,.parquet,.feather,text/csv,text/tab-separated-values,application/vnd.apache.parquet,application/octet-stream" onChange={handleFileChange} />Choose CSV</label>
+          <label className="primary-button upload-button"><input type="file" accept=".csv,.tsv,.parquet,.feather,text/csv,text/tab-separated-values,application/vnd.apache.parquet,application/octet-stream" onChange={handleFileChange} />Choose file</label>
         ) : (
           <div className="selected-file-card">
             <div className="file-details">
@@ -1065,7 +1065,7 @@ function App() {
             <div className="dataset-stats"><div><span>Rows</span><strong>{preview.row_count.toLocaleString()}</strong></div><div><span>Columns</span><strong>{preview.column_count}</strong></div></div>
           </div>
           <div className="preview-block">
-            <div className="preview-block-heading"><div><h3>First 10 rows</h3><p>The first {preview.first_preview.length} data rows in the uploaded CSV.</p></div><span className="sample-badge">Rows 1–{preview.first_preview.length}</span></div>
+            <div className="preview-block-heading"><div><h3>First 10 rows</h3><p>The first {preview.first_preview.length} data rows in the uploaded dataset.</p></div><span className="sample-badge">Rows 1–{preview.first_preview.length}</span></div>
             <PreviewTable columns={preview.columns} rows={preview.first_preview} />
           </div>
           {preview.random_preview.length > 0 && (
@@ -1144,7 +1144,7 @@ function App() {
 
         <section className="panel setup-card column-types-card">
           <div className="setup-section-heading">
-            <div><span className="setup-number">2</span><div><h2>Column types</h2><p>RiskLab detects the physical type from the CSV. Review or change the semantic type used by downstream analyses.</p></div></div>
+            <div><span className="setup-number">2</span><div><h2>Column types</h2><p>RiskLab detects the physical type from the uploaded dataset. Review or change the semantic type used by downstream analyses.</p></div></div>
             <UsedBy modules={['EDA', 'Segments', 'Stability', 'Challenger models']} />
           </div>
           <div className="column-type-table">
