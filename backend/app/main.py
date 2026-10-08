@@ -1,12 +1,11 @@
-import csv
-import io
 import random
 from datetime import datetime
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.calibration import run_calibration
+from app.dataset_io import MAX_ROWS, register_dataset
 from app.discrimination import run_discrimination
 from app.eda import run_eda
 from app.stability import run_stability
@@ -21,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MAX_ROWS = 1_000_000
 LARGE_DATASET_WARNING_ROWS = 1_000
 PREVIEW_ROWS = 10
 RANDOM_PREVIEW_ROWS = 10
@@ -30,11 +28,6 @@ RANDOM_PREVIEW_ROWS = 10
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "risklab-api"}
-
-
-def row_to_record(columns: list[str], row: list[str]) -> dict[str, str]:
-    padded = row + [""] * max(0, len(columns) - len(row))
-    return {column: padded[index] if index < len(padded) else "" for index, column in enumerate(columns)}
 
 
 def detect_value_type(value: str) -> str | None:
@@ -79,123 +72,83 @@ def resolve_column_type(observed_types: set[str]) -> str:
     return "string"
 
 
+@app.post("/datasets/upload")
 @app.post("/datasets/preview")
-async def preview_dataset(file: UploadFile = File(...)) -> dict[str, object]:
-    filename = file.filename or "dataset.csv"
-    if not filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported in RiskLab v0.1.")
+async def upload_dataset(file: UploadFile = File(...)) -> dict[str, object]:
+    dataset = await register_dataset(file)
+    columns = dataset["columns"]
+    rows = dataset["rows"]
+    row_count = len(rows)
 
-    await file.seek(0)
-    sample_bytes = await file.read(8192)
-    if not sample_bytes:
-        raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
+    observed_types: dict[str, set[str]] = {column: set() for column in columns}
+    for row in rows:
+        for column, value in row.items():
+            detected_type = detect_value_type(value)
+            if detected_type is not None:
+                observed_types[column].add(detected_type)
 
-    try:
-        sample = sample_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="The CSV file must be UTF-8 encoded.") from exc
+    first_rows = rows[:PREVIEW_ROWS]
+    remaining_indices = list(range(PREVIEW_ROWS, row_count))
+    sample_count = min(RANDOM_PREVIEW_ROWS, len(remaining_indices))
+    sampled_indices = sorted(random.sample(remaining_indices, sample_count)) if sample_count else []
 
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
+    first_preview = [
+        {"row_number": index + 1, "values": row}
+        for index, row in enumerate(first_rows)
+    ]
+    random_preview = [
+        {"row_number": index + 1, "values": rows[index]}
+        for index in sampled_indices
+    ]
 
-    await file.seek(0)
-    text_stream = io.TextIOWrapper(file.file, encoding="utf-8-sig", newline="")
-    reader = csv.reader(text_stream, dialect=dialect)
+    warning = None
+    if row_count > LARGE_DATASET_WARNING_ROWS:
+        warning = (
+            f"Large dataset: {row_count:,} rows. Files above {LARGE_DATASET_WARNING_ROWS:,} rows "
+            "may take longer to process."
+        )
 
-    try:
-        header = next(reader, None)
-        if header is None:
-            raise HTTPException(status_code=400, detail="The uploaded CSV file contains no rows.")
-
-        columns = [column.strip() for column in header]
-        if not columns or all(not column for column in columns):
-            raise HTTPException(status_code=400, detail="The CSV file must contain a header row.")
-        if len(set(columns)) != len(columns):
-            raise HTTPException(status_code=400, detail="Duplicate column names are not supported.")
-        if len(columns) < 2:
-            raise HTTPException(status_code=400, detail="The CSV file must contain at least two columns.")
-
-        row_count = 0
-        first_preview: list[dict[str, object]] = []
-        random_preview: list[dict[str, object]] = []
-        reservoir_seen = 0
-        observed_types: dict[str, set[str]] = {column: set() for column in columns}
-
-        for row in reader:
-            row_count += 1
-            if row_count > MAX_ROWS:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Dataset exceeds the {MAX_ROWS:,} row limit. Please upload a smaller CSV file.",
-                )
-
-            record = row_to_record(columns, row)
-            for column, value in record.items():
-                detected_type = detect_value_type(value)
-                if detected_type is not None:
-                    observed_types[column].add(detected_type)
-
-            item = {"row_number": row_count, "values": record}
-
-            if row_count <= PREVIEW_ROWS:
-                first_preview.append(item)
-                continue
-
-            reservoir_seen += 1
-            if len(random_preview) < RANDOM_PREVIEW_ROWS:
-                random_preview.append(item)
-            else:
-                replacement_index = random.randint(1, reservoir_seen)
-                if replacement_index <= RANDOM_PREVIEW_ROWS:
-                    random_preview[replacement_index - 1] = item
-
-        if row_count == 0:
-            raise HTTPException(status_code=400, detail="The CSV file contains a header but no data rows.")
-
-        random_preview.sort(key=lambda item: int(item["row_number"]))
-        warning = None
-        if row_count > LARGE_DATASET_WARNING_ROWS:
-            warning = (
-                f"Large dataset: {row_count:,} rows. Files above {LARGE_DATASET_WARNING_ROWS:,} rows "
-                "may take longer to process."
-            )
-
-        column_types = {column: resolve_column_type(observed_types[column]) for column in columns}
-
-        return {
-            "filename": filename,
-            "file_size_bytes": file.size,
-            "row_count": row_count,
-            "column_count": len(columns),
-            "columns": columns,
-            "column_types": column_types,
-            "first_preview": first_preview,
-            "random_preview": random_preview,
-            "delimiter": dialect.delimiter,
-            "warning": warning,
-            "max_rows": MAX_ROWS,
-        }
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="The CSV file must be UTF-8 encoded.") from exc
-    finally:
-        text_stream.detach()
+    return {
+        "dataset_id": dataset["dataset_id"],
+        "filename": dataset["filename"],
+        "file_format": dataset["format"],
+        "file_size_bytes": dataset["file_size_bytes"],
+        "row_count": row_count,
+        "column_count": len(columns),
+        "columns": columns,
+        "column_types": {
+            column: resolve_column_type(observed_types[column])
+            for column in columns
+        },
+        "first_preview": first_preview,
+        "random_preview": random_preview,
+        "delimiter": dataset["delimiter"] or None,
+        "warning": warning,
+        "max_rows": MAX_ROWS,
+    }
 
 
 @app.post("/eda/run")
-async def eda_run(file: UploadFile = File(...), config: str = Form(...), time_granularity: str = Form("monthly")) -> dict[str, object]:
-    return await run_eda(file=file, config=config, time_granularity=time_granularity)
+async def eda_run(
+    dataset_id: str = Form(...),
+    config: str = Form(...),
+    time_granularity: str = Form("monthly"),
+) -> dict[str, object]:
+    return await run_eda(
+        dataset_id=dataset_id,
+        config=config,
+        time_granularity=time_granularity,
+    )
 
 
 @app.post("/discrimination/run")
 async def discrimination_run(
-    file: UploadFile = File(...),
+    dataset_id: str = Form(...),
     config: str = Form(...),
     time_granularity: str = Form("monthly"),
 ) -> dict[str, object]:
     return await run_discrimination(
-        file=file,
+        dataset_id=dataset_id,
         config=config,
         time_granularity=time_granularity,
     )
@@ -203,15 +156,15 @@ async def discrimination_run(
 
 @app.post("/calibration/run")
 async def calibration_run(
-    file: UploadFile = File(...),
+    dataset_id: str = Form(...),
     config: str = Form(...),
 ) -> dict[str, object]:
-    return await run_calibration(file=file, config=config)
+    return await run_calibration(dataset_id=dataset_id, config=config)
 
 
 @app.post("/stability/run")
 async def stability_run(
-    file: UploadFile = File(...),
+    dataset_id: str = Form(...),
     config: str = Form(...),
 ) -> dict[str, object]:
-    return await run_stability(file=file, config=config)
+    return await run_stability(dataset_id=dataset_id, config=config)

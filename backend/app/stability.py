@@ -1,5 +1,3 @@
-import csv
-import io
 import json
 import math
 import statistics
@@ -7,7 +5,9 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
-from fastapi import File, Form, HTTPException, UploadFile
+from fastapi import Form, HTTPException
+
+from app.dataset_io import get_dataset
 
 EPSILON = 1e-6
 NUMERIC_BINS = 10
@@ -220,7 +220,7 @@ def _compare_variable(
     }
 
 
-async def run_stability(file: UploadFile = File(...), config: str = Form(...)) -> dict[str, Any]:
+async def run_stability(dataset_id: str = Form(...), config: str = Form(...)) -> dict[str, Any]:
     try:
         cfg = json.loads(config)
     except json.JSONDecodeError as exc:
@@ -240,37 +240,9 @@ async def run_stability(file: UploadFile = File(...), config: str = Form(...)) -
     if time_cutoff_date and cutoff_datetime is None:
         raise HTTPException(status_code=400, detail="Time cut-off must be a valid date.")
 
-    await file.seek(0)
-    sample = await file.read(8192)
-    if not sample:
-        raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
-    try:
-        sample_text = sample.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="The CSV file must be UTF-8 encoded.") from exc
-
-    try:
-        dialect = csv.Sniffer().sniff(sample_text, delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
-
-    await file.seek(0)
-    stream = io.TextIOWrapper(file.file, encoding="utf-8-sig", newline="")
-    reader = csv.DictReader(stream, dialect=dialect)
-    if not reader.fieldnames:
-        stream.detach()
-        raise HTTPException(status_code=400, detail="The CSV file must contain a header row.")
-
-    columns = [column.strip() for column in reader.fieldnames]
-    rows: list[dict[str, str]] = []
-    try:
-        for raw in reader:
-            rows.append({column: raw.get(column) or "" for column in columns})
-    finally:
-        stream.detach()
-
-    if not rows:
-        raise HTTPException(status_code=400, detail="The CSV file contains no data rows.")
+    dataset = get_dataset(dataset_id)
+    columns = list(dataset["columns"])
+    rows: list[dict[str, str]] = dataset["rows"]
 
     configured_variables = []
     for column in [prediction_column, *feature_columns]:

@@ -1,6 +1,4 @@
-import csv
 import hashlib
-import io
 import json
 import math
 import random
@@ -9,7 +7,9 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
-from fastapi import File, Form, HTTPException, UploadFile
+from fastapi import Form, HTTPException
+
+from app.dataset_io import get_dataset
 
 EDA_SAMPLE_ROWS = 20_000
 MAX_TRACKED_UNIQUES = 10_000
@@ -350,7 +350,7 @@ def _time_bucket(dt: datetime, granularity: str) -> str:
     return dt.strftime("%Y-%m")
 
 
-async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_granularity: str = Form("monthly")) -> dict[str, Any]:
+async def run_eda(dataset_id: str = Form(...), config: str = Form(...), time_granularity: str = Form("monthly")) -> dict[str, Any]:
     try:
         cfg = json.loads(config)
     except json.JSONDecodeError as exc:
@@ -360,29 +360,11 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
     population_columns: list[str] = cfg.get("populationColumns", [])
     time_column: str = cfg.get("timeColumn", "")
 
-    await file.seek(0)
-    sample_bytes = await file.read(8192)
-    if not sample_bytes:
-        raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
-    try:
-        sample_text = sample_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="The CSV file must be UTF-8 encoded.") from exc
+    dataset = get_dataset(dataset_id)
+    columns = list(dataset["columns"])
+    rows = dataset["rows"]
+    row_count = len(rows)
 
-    try:
-        dialect = csv.Sniffer().sniff(sample_text, delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
-
-    await file.seek(0)
-    text_stream = io.TextIOWrapper(file.file, encoding="utf-8-sig", newline="")
-    reader = csv.DictReader(text_stream, dialect=dialect)
-    if not reader.fieldnames:
-        text_stream.detach()
-        raise HTTPException(status_code=400, detail="The CSV file must contain a header row.")
-
-    columns = [column.strip() for column in reader.fieldnames]
-    row_count = 0
     missing_counts = Counter({column: 0 for column in columns})
     unique_values: dict[str, set[str]] = {column: set() for column in columns}
     unique_capped: set[str] = set()
@@ -396,52 +378,43 @@ async def run_eda(file: UploadFile = File(...), config: str = Form(...), time_gr
     numeric_min: dict[str, float] = {}
     numeric_max: dict[str, float] = {}
 
-    try:
-        for raw in reader:
-            row_count += 1
-            row = {column: (raw.get(column) or "") for column in columns}
+    for row_number, row in enumerate(rows, start=1):
+        digest = hashlib.blake2b(
+            "\x1f".join(row.get(column, "") for column in columns).encode("utf-8"),
+            digest_size=8,
+        ).digest()
+        if digest in duplicate_hashes:
+            duplicate_count += 1
+        else:
+            duplicate_hashes.add(digest)
 
-            digest = hashlib.blake2b(
-                "\x1f".join(row.get(column, "") for column in columns).encode("utf-8"),
-                digest_size=8,
-            ).digest()
-            if digest in duplicate_hashes:
-                duplicate_count += 1
-            else:
-                duplicate_hashes.add(digest)
+        for column in columns:
+            value = row[column]
+            if _is_missing(value):
+                missing_counts[column] += 1
+                continue
 
-            for column in columns:
-                value = row[column]
-                if _is_missing(value):
-                    missing_counts[column] += 1
-                    continue
+            if column not in unique_capped:
+                unique_values[column].add(value)
+                if len(unique_values[column]) > MAX_TRACKED_UNIQUES:
+                    unique_capped.add(column)
+                    unique_values[column].clear()
 
-                if column not in unique_capped:
-                    unique_values[column].add(value)
-                    if len(unique_values[column]) > MAX_TRACKED_UNIQUES:
-                        unique_capped.add(column)
-                        unique_values[column].clear()
+            if semantic_types.get(column) in {"continuous", "ordinal"}:
+                number = _to_float(value)
+                if number is not None:
+                    numeric_count[column] += 1
+                    numeric_sum[column] += number
+                    numeric_sum_sq[column] += number * number
+                    numeric_min[column] = min(numeric_min.get(column, number), number)
+                    numeric_max[column] = max(numeric_max.get(column, number), number)
 
-                if semantic_types.get(column) in {"continuous", "ordinal"}:
-                    number = _to_float(value)
-                    if number is not None:
-                        numeric_count[column] += 1
-                        numeric_sum[column] += number
-                        numeric_sum_sq[column] += number * number
-                        numeric_min[column] = min(numeric_min.get(column, number), number)
-                        numeric_max[column] = max(numeric_max.get(column, number), number)
-
-            if len(sample_rows) < EDA_SAMPLE_ROWS:
-                sample_rows.append(row)
-            else:
-                replacement = random.randint(1, row_count)
-                if replacement <= EDA_SAMPLE_ROWS:
-                    sample_rows[replacement - 1] = row
-
-        if row_count == 0:
-            raise HTTPException(status_code=400, detail="The CSV file contains a header but no data rows.")
-    finally:
-        text_stream.detach()
+        if len(sample_rows) < EDA_SAMPLE_ROWS:
+            sample_rows.append(row)
+        else:
+            replacement = random.randint(1, row_number)
+            if replacement <= EDA_SAMPLE_ROWS:
+                sample_rows[replacement - 1] = row
 
     profiles: list[dict[str, Any]] = []
     for column in columns:

@@ -1,5 +1,3 @@
-import csv
-import io
 import json
 import math
 from collections import Counter, defaultdict
@@ -7,7 +5,9 @@ from datetime import datetime
 from itertools import combinations
 from typing import Any
 
-from fastapi import File, Form, HTTPException, UploadFile
+from fastapi import Form, HTTPException
+
+from app.dataset_io import get_dataset
 
 MAX_CATEGORICAL_GROUPS = 20
 QUANTILE_GROUPS = 3
@@ -250,7 +250,7 @@ def _time_series(
 
 
 async def run_discrimination(
-    file: UploadFile = File(...),
+    dataset_id: str = Form(...),
     config: str = Form(...),
     time_granularity: str = Form("monthly"),
 ) -> dict[str, Any]:
@@ -287,54 +287,33 @@ async def run_discrimination(
     cutoff_key = "__time_cutoff__"
     cutoff_enabled = bool(time_column and cutoff_datetime and time_cutoff_as_segment)
 
-    await file.seek(0)
-    sample = await file.read(8192)
-    if not sample:
-        raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
-    try:
-        sample_text = sample.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="The CSV file must be UTF-8 encoded.") from exc
-
-    try:
-        dialect = csv.Sniffer().sniff(sample_text, delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
-
-    await file.seek(0)
-    stream = io.TextIOWrapper(file.file, encoding="utf-8-sig", newline="")
-    reader = csv.DictReader(stream, dialect=dialect)
-    if not reader.fieldnames:
-        stream.detach()
-        raise HTTPException(status_code=400, detail="The CSV file must contain a header row.")
+    dataset = get_dataset(dataset_id)
+    rows = dataset["rows"]
 
     records: list[dict[str, Any]] = []
     excluded_missing_prediction = 0
     excluded_missing_target = 0
 
-    try:
-        for row in reader:
-            prediction = _to_float(row.get(prediction_column))
-            if prediction is None:
-                excluded_missing_prediction += 1
-                continue
-            raw_target = row.get(target_column)
-            if raw_target is None or raw_target.strip() == "":
-                excluded_missing_target += 1
-                continue
+    for row in rows:
+        prediction = _to_float(row.get(prediction_column))
+        if prediction is None:
+            excluded_missing_prediction += 1
+            continue
+        raw_target = row.get(target_column)
+        if raw_target is None or raw_target.strip() == "":
+            excluded_missing_target += 1
+            continue
 
-            target = 1 if str(raw_target).strip() == positive_class else 0
-            risk_score = prediction
-            if prediction_type == "score" and score_direction == "lower-risk":
-                risk_score = -prediction
+        target = 1 if str(raw_target).strip() == positive_class else 0
+        risk_score = prediction
+        if prediction_type == "score" and score_direction == "lower-risk":
+            risk_score = -prediction
 
-            records.append({
-                "pair": (risk_score, target),
-                "row": row,
-                "date": _to_datetime(row.get(time_column)) if time_column else None,
-            })
-    finally:
-        stream.detach()
+        records.append({
+            "pair": (risk_score, target),
+            "row": row,
+            "date": _to_datetime(row.get(time_column)) if time_column else None,
+        })
 
     usable = [record["pair"] for record in records]
     if len(usable) < 2:

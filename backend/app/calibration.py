@@ -1,5 +1,3 @@
-import csv
-import io
 import json
 import math
 from collections import Counter, defaultdict
@@ -7,7 +5,9 @@ from datetime import datetime
 from itertools import combinations
 from typing import Any
 
-from fastapi import File, Form, HTTPException, UploadFile
+from fastapi import Form, HTTPException
+
+from app.dataset_io import get_dataset
 
 MAX_CATEGORICAL_GROUPS = 20
 CALIBRATION_BINS = 10
@@ -242,7 +242,7 @@ def _time_summary(
     ]
 
 
-async def run_calibration(file: UploadFile = File(...), config: str = Form(...)) -> dict[str, Any]:
+async def run_calibration(dataset_id: str = Form(...), config: str = Form(...)) -> dict[str, Any]:
     try:
         cfg = json.loads(config)
     except json.JSONDecodeError as exc:
@@ -275,55 +275,34 @@ async def run_calibration(file: UploadFile = File(...), config: str = Form(...))
         if column and column not in segment_columns and column not in {prediction_column, target_column, time_column}:
             segment_columns.append(column)
 
-    await file.seek(0)
-    sample = await file.read(8192)
-    if not sample:
-        raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
-    try:
-        sample_text = sample.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="The CSV file must be UTF-8 encoded.") from exc
-
-    try:
-        dialect = csv.Sniffer().sniff(sample_text, delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
-
-    await file.seek(0)
-    stream = io.TextIOWrapper(file.file, encoding="utf-8-sig", newline="")
-    reader = csv.DictReader(stream, dialect=dialect)
-    if not reader.fieldnames:
-        stream.detach()
-        raise HTTPException(status_code=400, detail="The CSV file must contain a header row.")
+    dataset = get_dataset(dataset_id)
+    rows = dataset["rows"]
 
     records: list[dict[str, Any]] = []
     excluded_missing_prediction = 0
     excluded_missing_target = 0
     excluded_invalid_pd = 0
 
-    try:
-        for row in reader:
-            pd = _to_float(row.get(prediction_column))
-            if pd is None:
-                excluded_missing_prediction += 1
-                continue
-            if pd < 0.0 or pd > 1.0:
-                excluded_invalid_pd += 1
-                continue
+    for row in rows:
+        pd = _to_float(row.get(prediction_column))
+        if pd is None:
+            excluded_missing_prediction += 1
+            continue
+        if pd < 0.0 or pd > 1.0:
+            excluded_invalid_pd += 1
+            continue
 
-            raw_target = row.get(target_column)
-            if raw_target is None or raw_target.strip() == "":
-                excluded_missing_target += 1
-                continue
+        raw_target = row.get(target_column)
+        if raw_target is None or raw_target.strip() == "":
+            excluded_missing_target += 1
+            continue
 
-            target = 1 if str(raw_target).strip() == positive_class else 0
-            records.append({
-                "pair": (pd, target),
-                "row": row,
-                "date": _to_datetime(row.get(time_column)) if time_column else None,
-            })
-    finally:
-        stream.detach()
+        target = 1 if str(raw_target).strip() == positive_class else 0
+        records.append({
+            "pair": (pd, target),
+            "row": row,
+            "date": _to_datetime(row.get(time_column)) if time_column else None,
+        })
 
     pairs = [record["pair"] for record in records]
     if not pairs:
