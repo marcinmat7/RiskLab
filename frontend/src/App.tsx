@@ -2200,25 +2200,96 @@ function App() {
     </section>
   )
 
-  const renderOverview = () => (
-    <section className="page-content">
-      <div className="model-header">
-        <div><div className="title-row"><h1>Consumer PD v1</h1><span className="validated-badge">● Validated</span></div><p>Retail credit risk model — Probability of Default</p></div>
-        <div className="header-actions"><button className="secondary-button">Version 1.0⌄</button><button className="secondary-button">Validation run&nbsp;&nbsp;<strong>2024-12-01</strong></button><button className="primary-button">▷ Run validation</button></div>
-      </div>
-      <div className="tabs"><button className="active">Summary</button><button>Key metrics</button><button>Charts</button><button>Data quality</button><button>Recent findings</button></div>
-      <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span className={metric.help ? 'metric-label-with-help' : undefined}>{metric.label}{metric.help ? <> {metricHelp(metric.help, metric.label)}</> : null}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
-      <div className="chart-grid">
-        <article className="panel chart-card"><div className="panel-title"><h2>ROC Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="30" className="dash-line"/><path d="M50,200 C90,105 165,65 250,49 C345,31 450,27 560,25" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model (AUC = 0.784)</div></article>
-        <article className="panel chart-card"><div className="panel-title"><h2>Calibration Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="25" className="dash-line"/><polyline points="50,198 115,179 185,163 255,139 330,122 405,110 480,86 560,52" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model calibration</div></article>
-      </div>
-      <div className="lower-grid">
-        <article className="panel"><div className="panel-title"><h2>Prediction Distribution</h2><span>•••</span></div><div className="bars">{[22,46,68,82,92,87,74,61,48,39,33,26,21,17,13,10].map((h, i) => <span key={i} style={{height:`${h}%`}} className={i > 8 ? 'bar warm' : 'bar'} />)}</div><div className="axis-labels"><span>0.001</span><span>0.01</span><span>0.1</span><span>1.0</span></div></article>
-        <article className="panel data-quality"><div className="panel-title"><h2>Data Quality</h2><span className="quality-pill">● No critical issues</span></div>{[['Missing values','0.2%','ok'],['Duplicate rows','0','ok'],['Constant columns','0','ok'],['Invalid dates','0','ok'],['Outliers detected','1.3%','warn']].map(([label,value,state]) => <div className="quality-row" key={label}><span className={state === 'ok' ? 'check' : 'warning'}>{state === 'ok' ? '✓' : '!'}</span><span>{label}</span><strong>{value}</strong></div>)}</article>
-      </div>
-      <article className="panel findings"><div className="panel-title"><h2>Recent Findings</h2><a href="#">View all findings →</a></div><div className="table-wrap flat"><table><thead><tr><th>Severity</th><th>Category</th><th>Message</th><th>Status</th></tr></thead><tbody><tr><td><span className="severity high">High</span></td><td>Stability</td><td>PSI for feature “Credit utilization” is 0.18 (&gt; 0.1)</td><td><span className="status open">Open</span></td></tr><tr><td><span className="severity medium">Medium</span></td><td>Data quality</td><td>5 columns have &gt; 5% missing values</td><td><span className="status open">Open</span></td></tr></tbody></table></div></article>
-    </section>
-  )
+  const renderOverview = () => {
+    if (!preview) {
+      return (
+        <section className="page-content overview-page">
+          <div className="overview-hero panel">
+            <div>
+              <p className="eyebrow">RiskLab workflow</p>
+              <h1>Start with validation data</h1>
+              <p>Upload the dataset, map model semantics in Validation, then return here to run the complete validation package with one click.</p>
+            </div>
+            <button className="primary-button" onClick={() => setActiveSection('Data')}>Open Data</button>
+          </div>
+          <div className="workflow-steps">
+            <article className="panel active"><span>1</span><div><strong>Data</strong><small>Upload validation dataset</small></div></article>
+            <article className="panel"><span>2</span><div><strong>Validation</strong><small>Map target, prediction and analysis roles</small></div></article>
+            <article className="panel"><span>3</span><div><strong>Overview</strong><small>Run analyses, findings and report</small></div></article>
+          </div>
+        </section>
+      )
+    }
+
+    const overviewFindings = validationReady ? collectFindings() : []
+    const redFindings = overviewFindings.filter((finding) => finding.severity === 'red').length
+    const yellowFindings = overviewFindings.filter((finding) => finding.severity === 'yellow').length
+    const availableAnalyses = ['EDA', 'Discrimination', ...(validationConfig.predictionType === 'pd' ? ['Calibration'] : []), 'Stability'] as AnalysisSection[]
+    const completedAnalyses = availableAnalyses.filter((section) => analysisStatus[section] === 'ready').length
+
+    return (
+      <section className="page-content overview-page">
+        <div className="overview-hero panel">
+          <div>
+            <p className="eyebrow">Validation workspace</p>
+            <h1>{preview.filename}</h1>
+            <p>{preview.row_count.toLocaleString()} observations · {preview.column_count} columns · {validationConfig.predictionType === 'pd' ? 'Probability of Default' : 'Score'} model</p>
+          </div>
+          <div className="overview-hero-actions">
+            {!validationReady ? (
+              <button className="primary-button" onClick={() => setActiveSection('Validation')}>Continue to Validation</button>
+            ) : (
+              <button className="primary-button" disabled={fullRunStatus === 'running'} onClick={runFullValidationAndReport}>
+                {fullRunStatus === 'running' ? 'Running full validation…' : reportHtml ? 'Run full validation again' : 'Run full validation & generate report'}
+              </button>
+            )}
+            {reportHtml && <button className="secondary-button" onClick={downloadReport}>Download HTML report</button>}
+          </div>
+        </div>
+
+        <div className="workflow-steps">
+          <article className="panel done"><span>1</span><div><strong>Data</strong><small>{preview.row_count.toLocaleString()} rows loaded</small></div></article>
+          <article className={validationReady ? 'panel done' : 'panel active'}><span>2</span><div><strong>Validation</strong><small>{validationReady ? 'Configuration validated' : 'Required before analyses'}</small></div></article>
+          <article className={fullRunStatus === 'ready' ? 'panel done' : validationReady ? 'panel active' : 'panel'}><span>3</span><div><strong>Overview</strong><small>Run complete validation package</small></div></article>
+        </div>
+
+        {fullRunError && <div className="message error-message">{fullRunError}</div>}
+        {fullRunStep && <div className={`overview-run-message ${fullRunStatus}`}><span className={`analysis-status-pill ${fullRunStatus === 'ready' ? 'ready' : fullRunStatus === 'failed' ? 'failed' : 'running'}`}><span />{fullRunStatus === 'ready' ? 'Complete' : fullRunStatus === 'failed' ? 'Failed' : 'Running'}</span><strong>{fullRunStep}</strong></div>}
+
+        <div className="overview-summary-grid">
+          <article className="metric-card"><span>Analyses completed</span><strong>{completedAnalyses}/{availableAnalyses.length}</strong><small className="neutral">EDA · discrimination · calibration · stability</small></article>
+          <article className="metric-card"><span>AUC</span><strong>{formatMetric(discriminationResult?.overall.auc)}</strong><small className="neutral">{discriminationResult ? `Gini ${formatMetric(discriminationResult.overall.gini)}` : 'Run full validation'}</small></article>
+          <article className="metric-card"><span>Calibration O/E</span><strong>{validationConfig.predictionType === 'pd' ? formatMetric(calibrationResult?.overall.oe_ratio) : 'N/A'}</strong><small className="neutral">{calibrationResult ? `DR ${formatPercent(calibrationResult.overall.default_rate)} · PD ${formatPercent(calibrationResult.overall.mean_pd)}` : 'Probability models only'}</small></article>
+          <article className="metric-card"><span>Findings</span><strong>{overviewFindings.length}</strong><small><span className="overview-finding-red">{redFindings} red</span> · <span className="overview-finding-yellow">{yellowFindings} yellow</span></small></article>
+          <article className="metric-card"><span>Missing cells</span><strong>{edaResult ? formatPercent(edaResult.overview.missing_rate) : '—'}</strong><small className="neutral">{edaResult ? `${edaResult.overview.missing_cells.toLocaleString()} cells` : 'Run EDA'}</small></article>
+          <article className="metric-card"><span>Report</span><strong>{reportHtml ? 'Ready' : '—'}</strong><small className="neutral">{reportGeneratedAt || 'Generated after full run'}</small></article>
+        </div>
+
+        <section className="panel overview-module-status">
+          <div className="panel-title"><div><h2>Validation package</h2><p className="eda-muted">Each module remains available independently, but Overview can execute the complete package.</p></div></div>
+          <div className="overview-module-grid">
+            {(['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports'] as AnalysisSection[]).map((section) => {
+              const unavailable = section === 'Calibration' && validationConfig.predictionType === 'score'
+              const status = unavailable ? 'unavailable' : analysisStatus[section]
+              return <button key={section} onClick={() => setActiveSection(section)}><span className={`nav-analysis-status ${status}`} /><strong>{section}</strong><small>{statusLabel(status)}</small></button>
+            })}
+          </div>
+        </section>
+
+        <section className="panel overview-findings-preview">
+          <div className="panel-title"><div><h2>Recent findings</h2><p className="eda-muted">Highest-severity findings from the active Finding Policy.</p></div><button className="text-button" onClick={() => setActiveSection('Findings')}>Open Findings →</button></div>
+          {overviewFindings.length ? (
+            <div className="table-wrap flat">
+              <table>
+                <thead><tr><th>Severity</th><th>Area</th><th>Finding</th><th>Key metrics</th></tr></thead>
+                <tbody>{overviewFindings.slice(0, 6).map((finding) => <tr key={finding.id}><td><span className={`finding-severity ${finding.severity}`}>{findingPolicy.global.severityLabels[finding.severity]}</span></td><td>{finding.area}</td><td>{finding.description}</td><td>{finding.metrics.join(' · ')}</td></tr>)}</tbody>
+              </table>
+            </div>
+          ) : <div className="eda-no-data">{validationReady ? 'No findings are currently triggered, or analyses have not been run yet.' : 'Complete Validation before findings can be assessed.'}</div>}
+        </section>
+      </section>
+    )
+  }
 
   const renderValidation = () => {
     if (!preview) {
