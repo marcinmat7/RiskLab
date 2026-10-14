@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "kind": "risklab-finding-policy",
+  "id": "risklab-default-v1",
+  "name": "RiskLab Default Finding Policy",
+  "version": "1.0",
+  "global": {
+    "minimumObservations": 100,
+    "minimumDefaults": 10,
+    "minimumNonDefaults": 10,
+    "severityLabels": {
+      "yellow": "Yellow",
+      "red": "Red"
+    },
+    "evaluateSegments": true,
+    "consecutivePeriodsRequired": 1
+  },
+  "rules": {
+    "validation": {
+      "parsingFailure": {
+        "enabled": true,
+        "yellowAnyFailure": true
+      }
+    },
+    "dataQuality": {
+      "missingRate": {
+        "enabled": true,
+        "yellowAbove": 0.05,
+        "redAbove": 0.2
+      },
+      "duplicateRate": {
+        "enabled": true,
+        "yellowAbove": 0,
+        "redAbove": 0.01
+      },
+      "constantVariable": {
+        "enabled": true,
+        "redUniqueNonMissingAtMost": 1
+      },
+      "dominantValueShare": {
+        "enabled": true,
+        "yellowAbove": 0.95,
+        "redAbove": 0.99
+      }
+    },
+    "cutoff": {
+      "missingRateIncrease": {
+        "enabled": true,
+        "yellowAbove": 0.05,
+        "redAbove": 0.1,
+        "onlyIncrease": true
+      }
+    },
+    "discrimination": {
+      "auc": {
+        "enabled": true,
+        "yellowBelow": 0.65,
+        "redBelow": 0.6
+      },
+      "aucDrop": {
+        "enabled": true,
+        "yellowAbove": 0.05,
+        "redAbove": 0.1
+      }
+    },
+    "calibration": {
+      "spiegelhalter": {
+        "enabled": true,
+        "yellowBelow": 0.05,
+        "redBelow": 0.01
+      },
+      "oeRatio": {
+        "enabled": true,
+        "yellowBelow": 0.9,
+        "yellowAbove": 1.1,
+        "redBelow": 0.8,
+        "redAbove": 1.2
+      },
+      "absoluteGap": {
+        "enabled": true,
+        "yellowAbove": 0.02,
+        "redAbove": 0.05
+      }
+    },
+    "stability": {
+      "psi": {
+        "enabled": true,
+        "yellowFrom": 0.1,
+        "redAbove": 0.25
+      },
+      "missingRateIncrease": {
+        "enabled": true,
+        "yellowAbove": 0.05,
+        "redAbove": 0.1,
+        "onlyIncrease": true
+      }
+    }
+  }
+}
