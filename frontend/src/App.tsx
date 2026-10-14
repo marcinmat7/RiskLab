@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import defaultFindingPolicyJson from './finding-policy.default.json'
+import { generateSelfContainedReport, type ReportFinding, type ReportInput } from './report'
 
 type HealthResponse = { status: string; service: string }
 
@@ -902,6 +903,11 @@ function App() {
   const [validationConfig, setValidationConfig] = useState<ValidationConfig>(initialConfig)
   const [findingPolicy, setFindingPolicy] = useState<FindingPolicy>(defaultFindingPolicy)
   const [findingPolicyMessage, setFindingPolicyMessage] = useState<string | null>(null)
+  const [fullRunStatus, setFullRunStatus] = useState<'idle' | 'running' | 'ready' | 'failed'>('idle')
+  const [fullRunStep, setFullRunStep] = useState('')
+  const [fullRunError, setFullRunError] = useState<string | null>(null)
+  const [reportHtml, setReportHtml] = useState('')
+  const [reportGeneratedAt, setReportGeneratedAt] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState<Record<AnalysisSection, AnalysisStatus>>(initialStatuses)
   const [lastRun, setLastRun] = useState<Partial<Record<AnalysisSection, string>>>({})
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
@@ -1015,6 +1021,11 @@ function App() {
     setValidationParsingWarnings([])
     setValidationRunError(null)
     setFindingPolicyMessage(null)
+    setFullRunStatus('idle')
+    setFullRunStep('')
+    setFullRunError(null)
+    setReportHtml('')
+    setReportGeneratedAt('')
   }
 
   const invalidateAnalysisResults = () => {
@@ -1046,6 +1057,11 @@ function App() {
     setValidationParsingWarnings([])
     setValidationRunError(null)
     setFindingPolicyMessage(null)
+    setFullRunStatus('idle')
+    setFullRunStep('')
+    setFullRunError(null)
+    setReportHtml('')
+    setReportGeneratedAt('')
   }
 
   const exportValidationConfig = () => {
@@ -1103,6 +1119,9 @@ function App() {
       }
       setFindingPolicy(parsed)
       setFindingPolicyMessage(`Loaded ${parsed.name} v${parsed.version}.`)
+      setReportHtml('')
+      setReportGeneratedAt('')
+      setAnalysisStatus((current) => ({ ...current, Findings: 'not-run', Reports: 'not-run' }))
     } catch (err) {
       setFindingPolicyMessage(err instanceof Error ? err.message : 'Could not import finding policy.')
     }
@@ -1111,6 +1130,9 @@ function App() {
   const resetFindingPolicy = () => {
     setFindingPolicy(defaultFindingPolicy)
     setFindingPolicyMessage(`Restored ${defaultFindingPolicy.name} v${defaultFindingPolicy.version}.`)
+    setReportHtml('')
+    setReportGeneratedAt('')
+    setAnalysisStatus((current) => ({ ...current, Findings: 'not-run', Reports: 'not-run' }))
   }
 
   const importValidationConfig = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1457,9 +1479,232 @@ function App() {
     }
   }
 
-  const renderFindings = () => {
-    if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
+  const makeReportHtml = (results?: {
+    eda?: EdaResult | null
+    discrimination?: DiscriminationResult | null
+    calibration?: CalibrationResult | null
+    stability?: StabilityResult | null
+    validationWarnings?: ValidationParsingWarning[]
+  }) => {
+    if (!preview) return { html: '', generatedAt: '' }
+    const currentEda = results?.eda === undefined ? edaResult : results.eda
+    const currentDiscrimination = results?.discrimination === undefined ? discriminationResult : results.discrimination
+    const currentCalibration = results?.calibration === undefined ? calibrationResult : results.calibration
+    const currentStability = results?.stability === undefined ? stabilityResult : results.stability
+    const findings = collectFindings({
+      validationWarnings: results?.validationWarnings,
+      eda: currentEda,
+      discrimination: currentDiscrimination,
+      calibration: currentCalibration,
+      stability: currentStability,
+    })
 
+    const psiByVariable = new Map<string, number>()
+    currentStability?.comparisons.forEach((comparison) => {
+      comparison.variables.forEach((variable) => {
+        psiByVariable.set(variable.column, Math.max(psiByVariable.get(variable.column) ?? 0, variable.psi))
+      })
+    })
+
+    const generatedAt = new Date().toLocaleString()
+    const input: ReportInput = {
+      generatedAt,
+      dataset: {
+        filename: preview.filename,
+        rows: preview.row_count,
+        columns: preview.column_count,
+      },
+      validation: {
+        predictionColumn: validationConfig.predictionColumn,
+        predictionType: validationConfig.predictionType,
+        targetColumn: validationConfig.targetColumn,
+        positiveClass: validationConfig.positiveClass,
+        timeColumn: validationConfig.timeColumn,
+        timeCutoffDate: validationConfig.timeCutoffDate,
+        populationColumns: validationConfig.populationColumns,
+        sensitiveColumns: validationConfig.sensitiveColumns,
+        featureColumns: validationConfig.featureColumns,
+      },
+      policy: {
+        id: findingPolicy.id,
+        name: findingPolicy.name,
+        version: findingPolicy.version,
+        schemaVersion: findingPolicy.schemaVersion,
+        minimumObservations: findingPolicy.global.minimumObservations,
+        minimumDefaults: findingPolicy.global.minimumDefaults,
+        minimumNonDefaults: findingPolicy.global.minimumNonDefaults,
+      },
+      discrimination: currentDiscrimination ? {
+        observations: currentDiscrimination.overall.observations,
+        defaults: currentDiscrimination.overall.defaults,
+        defaultRate: currentDiscrimination.overall.default_rate,
+        auc: currentDiscrimination.overall.auc,
+        gini: currentDiscrimination.overall.gini,
+        ks: currentDiscrimination.overall.ks,
+        badCapture10: currentDiscrimination.overall.bad_capture_10,
+        roc: currentDiscrimination.overall.roc.map((point) => ({ fpr: point.fpr, tpr: point.tpr })),
+      } : null,
+      calibration: currentCalibration ? {
+        brier: currentCalibration.overall.brier_score,
+        oe: currentCalibration.overall.oe_ratio,
+        meanPd: currentCalibration.overall.mean_pd,
+        defaultRate: currentCalibration.overall.default_rate,
+        spiegelhalterP: currentCalibration.overall.spiegelhalter_p_value,
+        bins: currentCalibration.overall.calibration_bins.map((row) => ({
+          meanPd: row.mean_pd,
+          observedRate: row.observed_default_rate,
+        })),
+      } : null,
+      stability: [...psiByVariable.entries()].map(([variable, psi]) => ({ variable, psi })),
+      dataQuality: currentEda ? {
+        missingRate: currentEda.overview.missing_rate,
+        duplicateRows: currentEda.overview.duplicate_rows,
+        duplicateRate: currentEda.overview.duplicate_rate,
+      } : null,
+      findings: findings.map((finding): ReportFinding => ({
+        area: finding.area,
+        description: finding.description,
+        metrics: finding.metrics,
+        severity: finding.severity,
+        criteria: finding.criteria,
+      })),
+    }
+    return { html: generateSelfContainedReport(input), generatedAt }
+  }
+
+  const downloadReport = () => {
+    if (!reportHtml || !preview) return
+    const blob = new Blob([reportHtml], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const baseName = (preview.filename || 'dataset').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '_')
+    anchor.href = url
+    anchor.download = `${baseName}_risklab_report.html`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const runFullValidationAndReport = async () => {
+    if (!preview || !validationReady || fullRunStatus === 'running') return
+    setFullRunStatus('running')
+    setFullRunError(null)
+    setReportHtml('')
+    setReportGeneratedAt('')
+
+    const startedAt = new Date().toLocaleString()
+    const setRunning = (section: AnalysisSection) =>
+      setAnalysisStatus((current) => ({ ...current, [section]: 'running' }))
+
+    const post = async <T,>(path: string, extra?: Record<string, string>): Promise<T> => {
+      const formData = new FormData()
+      formData.append('dataset_id', preview.dataset_id)
+      formData.append('config', JSON.stringify(validationConfig))
+      Object.entries(extra ?? {}).forEach(([key, value]) => formData.append(key, value))
+      const response = await fetch(`http://localhost:8000${path}`, { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      return body as T
+    }
+
+    try {
+      setFullRunStep('Running EDA, discrimination, calibration and stability…')
+      setRunning('EDA')
+      setRunning('Discrimination')
+      setRunning('Stability')
+      if (validationConfig.predictionType === 'pd') setRunning('Calibration')
+
+      const [eda, discrimination, calibration, stability] = await Promise.all([
+        post<EdaResult>('/eda/run', { time_granularity: timeGranularity }),
+        post<DiscriminationResult>('/discrimination/run', { time_granularity: discriminationGranularity }),
+        validationConfig.predictionType === 'pd' ? post<CalibrationResult>('/calibration/run') : Promise.resolve(null),
+        post<StabilityResult>('/stability/run'),
+      ])
+
+      setEdaResult(eda)
+      setDiscriminationResult(discrimination)
+      setCalibrationResult(calibration)
+      setStabilityResult(stability)
+
+      setEdaTimeVariable(eda.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column ?? '')
+      setEdaTimeMissingColumn(eda.profiles.find((profile) => profile.missing_count > 0)?.column ?? eda.profiles[0]?.column ?? '')
+      setTimeWorkspace(eda.time_analysis?.numeric_columns.slice(0, 2) ?? [])
+      setDiscriminationSegmentKey(discrimination.segment_performance[0]?.key ?? '')
+      setDiscriminationTimeSegmentKey('overall')
+      setCalibrationSegmentKey(calibration?.segment_performance[0]?.key ?? '')
+      setCalibrationTimeSegmentKey('overall')
+
+      const firstSource = stability.sources[0]
+      const firstReference = firstSource?.groups[0]?.value ?? ''
+      const firstComparison = firstSource?.groups.find((group) => group.value !== firstReference)?.value ?? ''
+      setStabilitySourceKey(firstSource?.key ?? '')
+      setStabilityReference(firstReference)
+      setStabilityComparison(firstComparison)
+      setStabilityVariable(stability.comparisons.find((item) =>
+        item.source_key === firstSource?.key &&
+        item.reference === firstReference &&
+        item.comparison === firstComparison
+      )?.variables[0]?.column ?? stability.variables[0]?.column ?? '')
+
+      setFullRunStep('Generating findings and self-contained HTML report…')
+      const generated = makeReportHtml({
+        eda,
+        discrimination,
+        calibration,
+        stability,
+        validationWarnings: validationParsingWarnings,
+      })
+      setReportHtml(generated.html)
+      setReportGeneratedAt(generated.generatedAt)
+
+      setAnalysisStatus((current) => ({
+        ...current,
+        EDA: 'ready',
+        Discrimination: 'ready',
+        Calibration: validationConfig.predictionType === 'pd' ? 'ready' : 'unavailable',
+        Stability: 'ready',
+        Findings: 'ready',
+        Reports: 'ready',
+      }))
+      setLastRun((current) => ({
+        ...current,
+        EDA: startedAt,
+        Discrimination: startedAt,
+        Calibration: validationConfig.predictionType === 'pd' ? startedAt : current.Calibration,
+        Stability: startedAt,
+        Findings: generated.generatedAt,
+        Reports: generated.generatedAt,
+      }))
+      setFullRunStep('Full validation completed.')
+      setFullRunStatus('ready')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Full validation failed.'
+      setFullRunError(message)
+      setFullRunStep('')
+      setFullRunStatus('failed')
+      setAnalysisStatus((current) => ({
+        ...current,
+        EDA: current.EDA === 'running' ? 'failed' : current.EDA,
+        Discrimination: current.Discrimination === 'running' ? 'failed' : current.Discrimination,
+        Calibration: current.Calibration === 'running' ? 'failed' : current.Calibration,
+        Stability: current.Stability === 'running' ? 'failed' : current.Stability,
+      }))
+    }
+  }
+
+  const collectFindings = (results?: {
+    validationWarnings?: ValidationParsingWarning[]
+    eda?: EdaResult | null
+    discrimination?: DiscriminationResult | null
+    calibration?: CalibrationResult | null
+    stability?: StabilityResult | null
+  }): Finding[] => {
+    const currentValidationWarnings = results?.validationWarnings ?? validationParsingWarnings
+    const currentEda = results?.eda === undefined ? edaResult : results.eda
+    const currentDiscrimination = results?.discrimination === undefined ? discriminationResult : results.discrimination
+    const currentCalibration = results?.calibration === undefined ? calibrationResult : results.calibration
+    const currentStability = results?.stability === undefined ? stabilityResult : results.stability
     const findings: Finding[] = []
     const minN = findingPolicy.global.minimumObservations
     const minDefaults = findingPolicy.global.minimumDefaults
@@ -1480,7 +1725,7 @@ function App() {
       observations >= minN && defaults >= minDefaults && observations - defaults >= minNonDefaults
 
     if (findingPolicy.rules.validation.parsingFailure.enabled) {
-      validationParsingWarnings.forEach((warning) => {
+      currentValidationWarnings.forEach((warning) => {
         if (warning.invalid_count > 0) {
           addFinding(
             `parsing-${warning.column}`,
@@ -1494,19 +1739,19 @@ function App() {
       })
     }
 
-    if (edaResult) {
+    if (currentEda) {
       const missingRule = findingPolicy.rules.dataQuality.missingRate
       const constantRule = findingPolicy.rules.dataQuality.constantVariable
       const dominantRule = findingPolicy.rules.dataQuality.dominantValueShare
-      edaResult.profiles.forEach((profile) => {
-        if (edaResult.overview.rows < minN) return
+      currentEda.profiles.forEach((profile) => {
+        if (currentEda.overview.rows < minN) return
         if (missingRule.enabled && profile.missing_rate > missingRule.yellowAbove) {
           const severity: FindingSeverity = profile.missing_rate > missingRule.redAbove ? 'red' : 'yellow'
           addFinding(
             `missing-${profile.column}`,
             'EDA',
             `High missing rate in ${profile.column}.`,
-            [`Missing ${pct(profile.missing_rate)}`, `n=${edaResult.overview.rows.toLocaleString()}`],
+            [`Missing ${pct(profile.missing_rate)}`, `n=${currentEda.overview.rows.toLocaleString()}`],
             severity,
             `Yellow > ${pct(missingRule.yellowAbove)} · Red > ${pct(missingRule.redAbove)}`,
           )
@@ -1542,21 +1787,21 @@ function App() {
       })
 
       const duplicateRule = findingPolicy.rules.dataQuality.duplicateRate
-      if (duplicateRule.enabled && edaResult.overview.rows >= minN && edaResult.overview.duplicate_rate > duplicateRule.yellowAbove) {
+      if (duplicateRule.enabled && currentEda.overview.rows >= minN && currentEda.overview.duplicate_rate > duplicateRule.yellowAbove) {
         addFinding(
           'duplicate-rows',
           'EDA',
           'Duplicate rows were detected in the dataset.',
-          [`${edaResult.overview.duplicate_rows.toLocaleString()} rows`, `${pct(edaResult.overview.duplicate_rate)} of dataset`],
-          edaResult.overview.duplicate_rate > duplicateRule.redAbove ? 'red' : 'yellow',
+          [`${currentEda.overview.duplicate_rows.toLocaleString()} rows`, `${pct(currentEda.overview.duplicate_rate)} of dataset`],
+          currentEda.overview.duplicate_rate > duplicateRule.redAbove ? 'red' : 'yellow',
           `Yellow > ${pct(duplicateRule.yellowAbove)} · Red > ${pct(duplicateRule.redAbove)}`,
         )
       }
 
       const cutoffRule = findingPolicy.rules.cutoff.missingRateIncrease
-      const daily = edaResult.time_analysis?.granularities.daily ?? []
+      const daily = currentEda.time_analysis?.granularities.daily ?? []
       if (cutoffRule.enabled && validationConfig.timeCutoffDate && daily.length) {
-        edaResult.time_analysis?.numeric_columns.forEach((column) => {
+        currentEda.time_analysis?.numeric_columns.forEach((column) => {
           const pre = daily.filter((bucket) => bucket.bucket < validationConfig.timeCutoffDate)
           const post = daily.filter((bucket) => bucket.bucket >= validationConfig.timeCutoffDate)
           const summarize = (rows: typeof daily) => {
@@ -1582,7 +1827,7 @@ function App() {
       }
     }
 
-    if (discriminationResult) {
+    if (currentDiscrimination) {
       const aucRule = findingPolicy.rules.discrimination.auc
       const assessAuc = (context: string, metrics: { observations: number; defaults: number; auc: number | null }, id: string) => {
         if (!aucRule.enabled || metrics.auc === null || !eligiblePerformance(metrics.observations, metrics.defaults)) return
@@ -1597,16 +1842,16 @@ function App() {
           )
         }
       }
-      assessAuc('Overall', discriminationResult.overall, 'auc-overall')
+      assessAuc('Overall', currentDiscrimination.overall, 'auc-overall')
       if (findingPolicy.global.evaluateSegments) {
-        discriminationResult.segment_performance.forEach((segment) => {
+        currentDiscrimination.segment_performance.forEach((segment) => {
           segment.groups.forEach((group) => assessAuc(`${segment.name}: ${group.value}`, group, `auc-${segment.key}-${group.value}`))
         })
       }
 
       const dropRule = findingPolicy.rules.discrimination.aucDrop
       if (dropRule.enabled && validationConfig.timeCutoffAsSegment) {
-        discriminationResult.segment_performance
+        currentDiscrimination.segment_performance
           .filter((segment) => segment.columns.includes('__time_cutoff__'))
           .forEach((segment) => {
             const beforeSuffix = validationConfig.timeCutoffBeforeLabel
@@ -1639,7 +1884,7 @@ function App() {
       }
     }
 
-    if (calibrationResult) {
+    if (currentCalibration) {
       const spiegelhalter = findingPolicy.rules.calibration.spiegelhalter
       const oe = findingPolicy.rules.calibration.oeRatio
       const gapRule = findingPolicy.rules.calibration.absoluteGap
@@ -1682,21 +1927,21 @@ function App() {
           )
         }
       }
-      assessCalibration('Overall', calibrationResult.overall, 'overall')
+      assessCalibration('Overall', currentCalibration.overall, 'overall')
       if (findingPolicy.global.evaluateSegments) {
-        calibrationResult.segment_performance.forEach((segment) => {
+        currentCalibration.segment_performance.forEach((segment) => {
           segment.groups.forEach((group) => assessCalibration(`${segment.name}: ${group.value}`, group, `${segment.key}-${group.value}`))
         })
       }
     }
 
-    if (stabilityResult) {
+    if (currentStability) {
       const psiRule = findingPolicy.rules.stability.psi
       const missingShiftRule = findingPolicy.rules.stability.missingRateIncrease
-      stabilityResult.sources.forEach((source) => {
+      currentStability.sources.forEach((source) => {
         const defaultReference = source.groups[0]?.value
         if (!defaultReference) return
-        stabilityResult.comparisons
+        currentStability.comparisons
           .filter((comparison) => comparison.source_key === source.key && comparison.reference === defaultReference)
           .forEach((comparison) => {
             if (comparison.reference_observations < minN || comparison.comparison_observations < minN) return
@@ -1732,6 +1977,14 @@ function App() {
       return a.area.localeCompare(b.area) || a.description.localeCompare(b.description)
     })
 
+
+    return findings
+  }
+
+  const renderFindings = () => {
+    if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
+
+    const findings = collectFindings()
     const redCount = findings.filter((finding) => finding.severity === 'red').length
     const yellowCount = findings.filter((finding) => finding.severity === 'yellow').length
 
@@ -1797,6 +2050,73 @@ function App() {
             <div className="eda-no-data">No findings are triggered by the available analysis results and the current policy.</div>
           )}
         </section>
+      </section>
+    )
+  }
+
+  const renderReports = () => {
+    if (!preview) return <EmptyAnalysisState section="Reports" onOpenData={() => setActiveSection('Data')} />
+
+    return (
+      <section className="page-content reports-page">
+        <div className="analysis-page-header">
+          <div>
+            <p className="eyebrow">Reports</p>
+            <h1>Validation report</h1>
+            <p>Generate a portable, self-contained HTML snapshot with metrics, embedded charts, findings, configuration and Finding Policy metadata.</p>
+          </div>
+          <div className="eda-header-actions">
+            <div className={`analysis-status-pill ${reportHtml ? 'ready' : validationReady ? 'not-run' : 'blocked'}`}><span />{reportHtml ? 'Report ready' : validationReady ? 'Not generated' : 'Blocked'}</div>
+            {reportHtml && <button className="primary-button" onClick={downloadReport}>Download HTML</button>}
+          </div>
+        </div>
+
+        {!validationReady ? (
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>Complete validation first</h2>
+            <p>RiskLab needs a validated dataset mapping before it can run the analysis package and generate a report.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open Validation</button>
+          </section>
+        ) : !reportHtml ? (
+          <section className="panel report-generate-card">
+            <div>
+              <p className="eyebrow">Self-contained HTML</p>
+              <h2>Generate the complete validation package</h2>
+              <p>The full run executes EDA, discrimination, calibration where available, stability, evaluates Findings and then builds one standalone HTML file. The file has no external assets and can be opened offline.</p>
+            </div>
+            <button className="primary-button" disabled={fullRunStatus === 'running'} onClick={runFullValidationAndReport}>{fullRunStatus === 'running' ? 'Generating…' : 'Run full validation & generate report'}</button>
+          </section>
+        ) : (
+          <>
+            <section className="panel report-ready-card">
+              <div>
+                <p className="eyebrow">Report ready</p>
+                <h2>{preview.filename}</h2>
+                <p>Generated {reportGeneratedAt}. The report contains inline CSS and SVG charts and does not depend on RiskLab, a server connection or external JavaScript after export.</p>
+              </div>
+              <div className="report-ready-actions">
+                <button className="primary-button" onClick={downloadReport}>Download self-contained HTML</button>
+                <button className="secondary-button" disabled={fullRunStatus === 'running'} onClick={runFullValidationAndReport}>Regenerate</button>
+              </div>
+            </section>
+
+            <section className="panel report-content-summary">
+              <div className="panel-title"><div><h2>Included in report</h2><p className="eda-muted">The export is a reproducible snapshot of the currently completed validation package.</p></div></div>
+              <div className="report-content-grid">
+                <div><strong>Executive metrics</strong><span>AUC, Gini, KS, Brier, O/E, PD and default rate</span></div>
+                <div><strong>Embedded charts</strong><span>ROC, calibration and top PSI values as inline SVG/CSS</span></div>
+                <div><strong>Findings</strong><span>Description, evidence, severity and policy criteria</span></div>
+                <div><strong>Configuration</strong><span>Dataset metadata, model mapping, time cut-off and segment roles</span></div>
+                <div><strong>Finding Policy</strong><span>Policy ID, version, schema and global sample requirements</span></div>
+                <div><strong>Offline portability</strong><span>One HTML file with no external assets</span></div>
+              </div>
+            </section>
+          </>
+        )}
+
+        {fullRunError && <div className="message error-message">{fullRunError}</div>}
+        {fullRunStatus === 'running' && <div className="overview-run-message running"><span className="analysis-status-pill running"><span />Running</span><strong>{fullRunStep}</strong></div>}
       </section>
     )
   }
@@ -1963,25 +2283,96 @@ function App() {
     </section>
   )
 
-  const renderOverview = () => (
-    <section className="page-content">
-      <div className="model-header">
-        <div><div className="title-row"><h1>Consumer PD v1</h1><span className="validated-badge">● Validated</span></div><p>Retail credit risk model — Probability of Default</p></div>
-        <div className="header-actions"><button className="secondary-button">Version 1.0⌄</button><button className="secondary-button">Validation run&nbsp;&nbsp;<strong>2024-12-01</strong></button><button className="primary-button">▷ Run validation</button></div>
-      </div>
-      <div className="tabs"><button className="active">Summary</button><button>Key metrics</button><button>Charts</button><button>Data quality</button><button>Recent findings</button></div>
-      <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span className={metric.help ? 'metric-label-with-help' : undefined}>{metric.label}{metric.help ? <> {metricHelp(metric.help, metric.label)}</> : null}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
-      <div className="chart-grid">
-        <article className="panel chart-card"><div className="panel-title"><h2>ROC Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="30" className="dash-line"/><path d="M50,200 C90,105 165,65 250,49 C345,31 450,27 560,25" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model (AUC = 0.784)</div></article>
-        <article className="panel chart-card"><div className="panel-title"><h2>Calibration Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="25" className="dash-line"/><polyline points="50,198 115,179 185,163 255,139 330,122 405,110 480,86 560,52" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model calibration</div></article>
-      </div>
-      <div className="lower-grid">
-        <article className="panel"><div className="panel-title"><h2>Prediction Distribution</h2><span>•••</span></div><div className="bars">{[22,46,68,82,92,87,74,61,48,39,33,26,21,17,13,10].map((h, i) => <span key={i} style={{height:`${h}%`}} className={i > 8 ? 'bar warm' : 'bar'} />)}</div><div className="axis-labels"><span>0.001</span><span>0.01</span><span>0.1</span><span>1.0</span></div></article>
-        <article className="panel data-quality"><div className="panel-title"><h2>Data Quality</h2><span className="quality-pill">● No critical issues</span></div>{[['Missing values','0.2%','ok'],['Duplicate rows','0','ok'],['Constant columns','0','ok'],['Invalid dates','0','ok'],['Outliers detected','1.3%','warn']].map(([label,value,state]) => <div className="quality-row" key={label}><span className={state === 'ok' ? 'check' : 'warning'}>{state === 'ok' ? '✓' : '!'}</span><span>{label}</span><strong>{value}</strong></div>)}</article>
-      </div>
-      <article className="panel findings"><div className="panel-title"><h2>Recent Findings</h2><a href="#">View all findings →</a></div><div className="table-wrap flat"><table><thead><tr><th>Severity</th><th>Category</th><th>Message</th><th>Status</th></tr></thead><tbody><tr><td><span className="severity high">High</span></td><td>Stability</td><td>PSI for feature “Credit utilization” is 0.18 (&gt; 0.1)</td><td><span className="status open">Open</span></td></tr><tr><td><span className="severity medium">Medium</span></td><td>Data quality</td><td>5 columns have &gt; 5% missing values</td><td><span className="status open">Open</span></td></tr></tbody></table></div></article>
-    </section>
-  )
+  const renderOverview = () => {
+    if (!preview) {
+      return (
+        <section className="page-content overview-page">
+          <div className="overview-hero panel">
+            <div>
+              <p className="eyebrow">RiskLab workflow</p>
+              <h1>Start with validation data</h1>
+              <p>Upload the dataset, map model semantics in Validation, then return here to run the complete validation package with one click.</p>
+            </div>
+            <button className="primary-button" onClick={() => setActiveSection('Data')}>Open Data</button>
+          </div>
+          <div className="workflow-steps">
+            <article className="panel active"><span>1</span><div><strong>Data</strong><small>Upload validation dataset</small></div></article>
+            <article className="panel"><span>2</span><div><strong>Validation</strong><small>Map target, prediction and analysis roles</small></div></article>
+            <article className="panel"><span>3</span><div><strong>Overview</strong><small>Run analyses, findings and report</small></div></article>
+          </div>
+        </section>
+      )
+    }
+
+    const overviewFindings = validationReady ? collectFindings() : []
+    const redFindings = overviewFindings.filter((finding) => finding.severity === 'red').length
+    const yellowFindings = overviewFindings.filter((finding) => finding.severity === 'yellow').length
+    const availableAnalyses = ['EDA', 'Discrimination', ...(validationConfig.predictionType === 'pd' ? ['Calibration'] : []), 'Stability'] as AnalysisSection[]
+    const completedAnalyses = availableAnalyses.filter((section) => analysisStatus[section] === 'ready').length
+
+    return (
+      <section className="page-content overview-page">
+        <div className="overview-hero panel">
+          <div>
+            <p className="eyebrow">Validation workspace</p>
+            <h1>{preview.filename}</h1>
+            <p>{preview.row_count.toLocaleString()} observations · {preview.column_count} columns · {validationConfig.predictionType === 'pd' ? 'Probability of Default' : 'Score'} model</p>
+          </div>
+          <div className="overview-hero-actions">
+            {!validationReady ? (
+              <button className="primary-button" onClick={() => setActiveSection('Validation')}>Continue to Validation</button>
+            ) : (
+              <button className="primary-button" disabled={fullRunStatus === 'running'} onClick={runFullValidationAndReport}>
+                {fullRunStatus === 'running' ? 'Running full validation…' : reportHtml ? 'Run full validation again' : 'Run full validation & generate report'}
+              </button>
+            )}
+            {reportHtml && <button className="secondary-button" onClick={downloadReport}>Download HTML report</button>}
+          </div>
+        </div>
+
+        <div className="workflow-steps">
+          <article className="panel done"><span>1</span><div><strong>Data</strong><small>{preview.row_count.toLocaleString()} rows loaded</small></div></article>
+          <article className={validationReady ? 'panel done' : 'panel active'}><span>2</span><div><strong>Validation</strong><small>{validationReady ? 'Configuration validated' : 'Required before analyses'}</small></div></article>
+          <article className={fullRunStatus === 'ready' ? 'panel done' : validationReady ? 'panel active' : 'panel'}><span>3</span><div><strong>Overview</strong><small>Run complete validation package</small></div></article>
+        </div>
+
+        {fullRunError && <div className="message error-message">{fullRunError}</div>}
+        {fullRunStep && <div className={`overview-run-message ${fullRunStatus}`}><span className={`analysis-status-pill ${fullRunStatus === 'ready' ? 'ready' : fullRunStatus === 'failed' ? 'failed' : 'running'}`}><span />{fullRunStatus === 'ready' ? 'Complete' : fullRunStatus === 'failed' ? 'Failed' : 'Running'}</span><strong>{fullRunStep}</strong></div>}
+
+        <div className="overview-summary-grid">
+          <article className="metric-card"><span>Analyses completed</span><strong>{completedAnalyses}/{availableAnalyses.length}</strong><small className="neutral">EDA · discrimination · calibration · stability</small></article>
+          <article className="metric-card"><span>AUC</span><strong>{formatMetric(discriminationResult?.overall.auc)}</strong><small className="neutral">{discriminationResult ? `Gini ${formatMetric(discriminationResult.overall.gini)}` : 'Run full validation'}</small></article>
+          <article className="metric-card"><span>Calibration O/E</span><strong>{validationConfig.predictionType === 'pd' ? formatMetric(calibrationResult?.overall.oe_ratio) : 'N/A'}</strong><small className="neutral">{calibrationResult ? `DR ${formatPercent(calibrationResult.overall.default_rate)} · PD ${formatPercent(calibrationResult.overall.mean_pd)}` : 'Probability models only'}</small></article>
+          <article className="metric-card"><span>Findings</span><strong>{overviewFindings.length}</strong><small><span className="overview-finding-red">{redFindings} red</span> · <span className="overview-finding-yellow">{yellowFindings} yellow</span></small></article>
+          <article className="metric-card"><span>Missing cells</span><strong>{edaResult ? formatPercent(edaResult.overview.missing_rate) : '—'}</strong><small className="neutral">{edaResult ? `${edaResult.overview.missing_cells.toLocaleString()} cells` : 'Run EDA'}</small></article>
+          <article className="metric-card"><span>Report</span><strong>{reportHtml ? 'Ready' : '—'}</strong><small className="neutral">{reportGeneratedAt || 'Generated after full run'}</small></article>
+        </div>
+
+        <section className="panel overview-module-status">
+          <div className="panel-title"><div><h2>Validation package</h2><p className="eda-muted">Each module remains available independently, but Overview can execute the complete package.</p></div></div>
+          <div className="overview-module-grid">
+            {(['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports'] as AnalysisSection[]).map((section) => {
+              const unavailable = section === 'Calibration' && validationConfig.predictionType === 'score'
+              const status = unavailable ? 'unavailable' : analysisStatus[section]
+              return <button key={section} onClick={() => setActiveSection(section)}><span className={`nav-analysis-status ${status}`} /><strong>{section}</strong><small>{statusLabel(status)}</small></button>
+            })}
+          </div>
+        </section>
+
+        <section className="panel overview-findings-preview">
+          <div className="panel-title"><div><h2>Recent findings</h2><p className="eda-muted">Highest-severity findings from the active Finding Policy.</p></div><button className="text-button" onClick={() => setActiveSection('Findings')}>Open Findings →</button></div>
+          {overviewFindings.length ? (
+            <div className="table-wrap flat">
+              <table>
+                <thead><tr><th>Severity</th><th>Area</th><th>Finding</th><th>Key metrics</th></tr></thead>
+                <tbody>{overviewFindings.slice(0, 6).map((finding) => <tr key={finding.id}><td><span className={`finding-severity ${finding.severity}`}>{findingPolicy.global.severityLabels[finding.severity]}</span></td><td>{finding.area}</td><td>{finding.description}</td><td>{finding.metrics.join(' · ')}</td></tr>)}</tbody>
+              </table>
+            </div>
+          ) : <div className="eda-no-data">{validationReady ? 'No findings are currently triggered, or analyses have not been run yet.' : 'Complete Validation before findings can be assessed.'}</div>}
+        </section>
+      </section>
+    )
+  }
 
   const renderValidation = () => {
     if (!preview) {
@@ -3513,8 +3904,9 @@ function App() {
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
         {activeSection === 'Findings' && renderFindings()}
+        {activeSection === 'Reports' && renderReports()}
         {activeSection === 'Methodology' && renderMethodology()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Reports' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
