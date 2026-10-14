@@ -744,33 +744,6 @@ function EChart({ option, height = 360, group }: { option: echarts.EChartsOption
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    if (activeSection !== 'Methodology' || !methodologyTarget) return
-    const timer = window.setTimeout(() => {
-      document.getElementById(`methodology-${methodologyTarget}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [activeSection, methodologyTarget])
-
-  const openMethodology = (metric: string) => {
-    setMethodologyTarget(metric)
-    setMethodologySearch('')
-    setActiveSection('Methodology')
-  }
-
-  const metricHelp = (metric: string, label: string) => (
-    <button
-      type="button"
-      className="metric-help-button"
-      title={`Open methodology for ${label}`}
-      aria-label={`Open methodology for ${label}`}
-      onClick={(event) => {
-        event.stopPropagation()
-        openMethodology(metric)
-      }}
-    >?</button>
-  )
-
-  useEffect(() => {
     if (!ref.current) return
     const chart = echarts.init(ref.current)
     if (group) {
@@ -838,6 +811,33 @@ function App() {
   const [activeSection, setActiveSection] = useState<Section>('Overview')
   const [methodologySearch, setMethodologySearch] = useState('')
   const [methodologyTarget, setMethodologyTarget] = useState('')
+
+  useEffect(() => {
+    if (activeSection !== 'Methodology' || !methodologyTarget) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(`methodology-${methodologyTarget}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeSection, methodologyTarget])
+
+  const openMethodology = (metric: string) => {
+    setMethodologyTarget(metric)
+    setMethodologySearch('')
+    setActiveSection('Methodology')
+  }
+
+  const metricHelp = (metric: string, label: string) => (
+    <button
+      type="button"
+      className="metric-help-button"
+      title={`Open methodology for ${label}`}
+      aria-label={`Open methodology for ${label}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        openMethodology(metric)
+      }}
+    >?</button>
+  )
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
