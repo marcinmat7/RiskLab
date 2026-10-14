@@ -2028,7 +2028,7 @@ function App() {
                 <div className="eda-kpi-grid">
                   <article className="metric-card"><span>Rows</span><strong>{edaResult.overview.rows.toLocaleString()}</strong><small className="neutral">Full dataset</small></article>
                   <article className="metric-card"><span>Columns</span><strong>{edaResult.overview.columns}</strong><small className="neutral">Configured schema</small></article>
-                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > .05 ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
+                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > validationConfig.findingPolicy.missingWatch ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
                   <article className="metric-card"><span>Duplicate rows</span><strong>{edaResult.overview.duplicate_rows.toLocaleString()}</strong><small className={edaResult.overview.duplicate_rows ? 'negative' : 'positive'}>{formatPercent(edaResult.overview.duplicate_rate)}</small></article>
                 </div>
                 <section className="panel eda-section">
@@ -2238,7 +2238,7 @@ function App() {
                               <td>{variable.column}</td><td>{variable.semantic_type}</td>
                               {activeReference?.comparisons.map((comparison) => <td key={comparison.comparison}>{(variable.values[comparison.comparison] ?? 0).toFixed(4)}</td>)}
                               <td><strong>{variable.maxPsi.toFixed(4)}</strong></td>
-                              <td><span className={variable.maxPsi >= .25 ? 'eda-signal bad' : variable.maxPsi >= .1 ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= .25 ? 'High' : variable.maxPsi >= .1 ? 'Moderate' : 'Low'}</span></td>
+                              <td><span className={variable.maxPsi >= validationConfig.findingPolicy.psiHigh ? 'eda-signal bad' : variable.maxPsi >= validationConfig.findingPolicy.psiModerate ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= validationConfig.findingPolicy.psiHigh ? 'High' : variable.maxPsi >= validationConfig.findingPolicy.psiModerate ? 'Moderate' : 'Low'}</span></td>
                             </tr>
                           ))}</tbody>
                         </table>
@@ -2751,7 +2751,7 @@ function App() {
               ))}</tbody>
             </table>
           </div>
-          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ 5% · no significant evidence of miscalibration</span><span><i className="warn" />1% ≤ p &lt; 5% · evidence of miscalibration</span><span><i className="bad" />p &lt; 1% · strong evidence of miscalibration</span></div>
+          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ {(validationConfig.findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · no significant evidence</span><span><i className="warn" />{(validationConfig.findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% ≤ p &lt; {(validationConfig.findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · evidence</span><span><i className="bad" />p &lt; {(validationConfig.findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% · strong evidence</span></div>
         </section>
 
         <div className="calibration-kpis">
@@ -2911,8 +2911,8 @@ function App() {
           label: { color: '#91a0b7' },
           lineStyle: { type: 'dashed', width: 1 },
           data: [
-            { yAxis: result.thresholds.moderate, label: { formatter: '0.10 · moderate' }, lineStyle: { color: '#d99a3e' } },
-            { yAxis: result.thresholds.high, label: { formatter: '0.25 · high' }, lineStyle: { color: '#e56f6f' } },
+            { yAxis: validationConfig.findingPolicy.psiModerate, label: { formatter: `${validationConfig.findingPolicy.psiModerate.toFixed(2)} · moderate` }, lineStyle: { color: '#d99a3e' } },
+            { yAxis: validationConfig.findingPolicy.psiHigh, label: { formatter: `${validationConfig.findingPolicy.psiHigh.toFixed(2)} · high` }, lineStyle: { color: '#e56f6f' } },
             ...(cutoffMarkLine ? cutoffMarkLine.data : []),
           ],
         },
@@ -2994,7 +2994,7 @@ function App() {
                   ))}</tbody>
                 </table>
               </div>
-              <div className="eda-sample-note">{result.thresholds.note} Click a variable row to inspect its distribution.</div>
+              <div className="eda-sample-note">Finding thresholds are configurable in Validation. Current PSI policy: moderate from {validationConfig.findingPolicy.psiModerate.toFixed(2)}, high above {validationConfig.findingPolicy.psiHigh.toFixed(2)}. Click a variable row to inspect its distribution.</div>
             </section>
 
             {activeVariable && distributionOption && (
