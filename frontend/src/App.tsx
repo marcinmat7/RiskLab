@@ -25,8 +25,8 @@ type DatasetPreview = {
 }
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
-type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports'
-type AnalysisSection = Exclude<Section, 'Overview' | 'Data'>
+type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports' | 'Methodology'
+type AnalysisSection = Exclude<Section, 'Overview' | 'Data' | 'Methodology'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
 type ScoreDirection = 'higher-risk' | 'lower-risk'
@@ -62,6 +62,34 @@ type ValidationConfigMessage = {
   details: string[]
 }
 
+type ValidationParsingWarning = {
+  column: string
+  detected_physical_type: PhysicalType
+  requested_semantic_type: SemanticType
+  effective_semantic_type: SemanticType
+  non_missing_count: number
+  invalid_count: number
+  invalid_examples: string[]
+  status: 'warning'
+  message: string
+}
+
+type ValidationRunResult = {
+  status: 'ok' | 'warning'
+  effective_semantic_types: Record<string, SemanticType>
+  column_results: {
+    column: string
+    detected_physical_type: PhysicalType
+    requested_semantic_type: SemanticType
+    effective_semantic_type: SemanticType
+    non_missing_count: number
+    invalid_count: number
+    invalid_examples: string[]
+    status: 'ok' | 'warning'
+  }[]
+  warnings: ValidationParsingWarning[]
+}
+
 type EdaTab = 'Overview' | 'Data quality' | 'Distributions' | 'Relationships' | 'Population comparison' | 'Time analysis' | 'Missingness'
 type TimeGranularity = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
 
@@ -86,6 +114,15 @@ type EdaProfile = {
     cdf: { x: number; cdf: number }[]
   }
   categories?: { value: string; count: number; share: number }[]
+  univariate_auc: number | null
+  auc_direction: 'higher-is-riskier' | 'lower-is-riskier' | 'category-logit' | null
+  category_logits: {
+    value: string
+    count: number
+    defaults: number
+    default_rate: number
+    logit: number
+  }[]
   uniqueness_rate?: number | null
   text_summary?: { mean_length: number; median_length: number; max_length: number }
 }
@@ -334,16 +371,222 @@ type StabilityResult = {
   }
 }
 
-const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
+const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports', 'Methodology']
 const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
 
+type MethodologyEntry = {
+  id: string
+  title: string
+  aliases: string[]
+  group: 'Discrimination' | 'Calibration' | 'Stability' | 'EDA'
+  summary: string
+  formula?: string
+  interpretation: string[]
+  implementation: string[]
+  limitations: string[]
+  related: string[]
+}
+
+const methodologyEntries: MethodologyEntry[] = [
+  {
+    id: 'roc-auc',
+    title: 'ROC AUC',
+    aliases: ['auc', 'area under roc', 'receiver operating characteristic'],
+    group: 'Discrimination',
+    summary: 'Measures how well a score ranks randomly selected defaulted observations above randomly selected non-defaulted observations.',
+    formula: 'AUC = P(score_default > score_non-default) + 0.5 · P(tie)',
+    interpretation: ['0.5 means no ranking power.', '1.0 means perfect ranking.', 'AUC describes ranking, not probability calibration.'],
+    implementation: ['RiskLab normalizes model direction so higher internal risk score means higher risk.', 'ROC points are evaluated at score boundaries.'],
+    limitations: ['AUC can look strong even when probability calibration is poor.', 'It can hide weak performance in a specific operating region or subgroup.'],
+    related: ['gini', 'ks', 'cap'],
+  },
+  {
+    id: 'gini',
+    title: 'Gini coefficient',
+    aliases: ['gini'],
+    group: 'Discrimination',
+    summary: 'A linear transformation of ROC AUC commonly used in credit risk.',
+    formula: 'Gini = 2 · AUC − 1',
+    interpretation: ['0 corresponds to AUC = 0.5.', '1 corresponds to perfect ranking.'],
+    implementation: ['RiskLab derives Gini directly from the calculated ROC AUC.'],
+    limitations: ['It contains the same ranking information as AUC and should not be interpreted as a separate independent performance test.'],
+    related: ['roc-auc', 'ks'],
+  },
+  {
+    id: 'ks',
+    title: 'Kolmogorov–Smirnov statistic (KS)',
+    aliases: ['ks', 'kolmogorov smirnov'],
+    group: 'Discrimination',
+    summary: 'Measures the largest separation between cumulative default and non-default score distributions.',
+    formula: 'KS = max |TPR − FPR|',
+    interpretation: ['Higher values indicate stronger separation.', 'The statistic is tied to the point of maximum separation, unlike AUC which summarizes the full ranking curve.'],
+    implementation: ['RiskLab computes KS from the same score-ordered ROC traversal used for discrimination.'],
+    limitations: ['A single maximum-separation point can hide behaviour elsewhere in the score range.'],
+    related: ['roc-auc', 'gini'],
+  },
+  {
+    id: 'cap',
+    title: 'CAP / cumulative gains curve',
+    aliases: ['cap', 'cumulative accuracy profile', 'gains'],
+    group: 'Discrimination',
+    summary: 'Shows how quickly defaults are captured when observations are ordered from highest to lowest predicted risk.',
+    interpretation: ['A stronger model captures a larger share of defaults in a smaller share of the population.', 'The diagonal-like random benchmark represents no ranking power.'],
+    implementation: ['RiskLab orders observations by normalized risk score and reports cumulative population share versus cumulative captured defaults.'],
+    limitations: ['The shape depends on the portfolio default rate, so direct visual comparison across very different populations needs care.'],
+    related: ['roc-auc', 'bad-capture'],
+  },
+  {
+    id: 'bad-capture',
+    title: 'Bad capture @ 10%',
+    aliases: ['bad capture', 'capture at 10', 'top 10'],
+    group: 'Discrimination',
+    summary: 'Share of all defaults captured within the riskiest 10% of observations.',
+    formula: 'Bad capture @ 10% = defaults in top-risk 10% / all defaults',
+    interpretation: ['Higher values indicate that defaults are concentrated near the risky end of the ranking.'],
+    implementation: ['RiskLab uses ceil(10% · N) observations after sorting by normalized risk score.'],
+    limitations: ['It focuses on one operating point and is sensitive to sample size and the portfolio default rate.'],
+    related: ['cap', 'roc-auc'],
+  },
+  {
+    id: 'brier',
+    title: 'Brier score',
+    aliases: ['brier'],
+    group: 'Calibration',
+    summary: 'Mean squared error between predicted probabilities and binary outcomes.',
+    formula: 'Brier = mean((p − y)²)',
+    interpretation: ['Lower is better.', 'A value of 0 means perfect probability predictions on the observed sample.'],
+    implementation: ['RiskLab calculates the score on usable PD/target observations.'],
+    limitations: ['Brier score combines calibration and discrimination effects; it is not a pure calibration test.'],
+    related: ['spiegelhalter', 'oe-ratio', 'calibration-curve'],
+  },
+  {
+    id: 'spiegelhalter',
+    title: 'Spiegelhalter Z-test',
+    aliases: ['spiegelhalter', 'spiegelhalter test', 'z test calibration'],
+    group: 'Calibration',
+    summary: 'Tests whether submitted predicted probabilities are statistically consistent with observed binary outcomes.',
+    formula: 'Z = Σ[(y − p)(1 − 2p)] / √Σ[(1 − 2p)²p(1 − p)]',
+    interpretation: ['p ≥ 5%: no significant evidence of miscalibration.', '1% ≤ p < 5%: evidence of miscalibration.', 'p < 1%: strong evidence of miscalibration.'],
+    implementation: ['RiskLab uses the observation-level two-sided test.', 'The displayed p-value is computed from the standard normal distribution.'],
+    limitations: ['A non-significant result does not prove good calibration.', 'Statistical power depends on sample size and the distribution of submitted probabilities.'],
+    related: ['brier', 'oe-ratio', 'calibration-curve'],
+  },
+  {
+    id: 'oe-ratio',
+    title: 'Observed / Expected ratio (O/E)',
+    aliases: ['oe', 'o/e', 'observed expected'],
+    group: 'Calibration',
+    summary: 'Compares the observed number of defaults with the number expected from submitted PDs.',
+    formula: 'O/E = Σy / Σp',
+    interpretation: ['O/E = 1 indicates agreement in average risk level.', 'O/E > 1 means observed defaults exceed expected defaults.', 'O/E < 1 means expected defaults exceed observed defaults.'],
+    implementation: ['Expected defaults are the sum of individual PD values.'],
+    limitations: ['O/E measures average calibration and can miss offsetting calibration errors across the PD range.'],
+    related: ['brier', 'spiegelhalter', 'calibration-curve'],
+  },
+  {
+    id: 'calibration-curve',
+    title: 'Calibration curve',
+    aliases: ['calibration plot', 'reliability curve'],
+    group: 'Calibration',
+    summary: 'Compares average predicted PD with observed default rate across groups of observations.',
+    interpretation: ['Points near the 45° line indicate agreement between predicted and observed rates.', 'Points above the line indicate underprediction of risk; points below indicate overprediction.'],
+    implementation: ['RiskLab currently uses 10 equal-frequency PD bins for the overall curve.', 'Observed-rate confidence intervals are computed with Wilson intervals in the backend.'],
+    limitations: ['The visual result depends on binning, and sparse bins can be noisy.'],
+    related: ['wilson', 'brier', 'spiegelhalter'],
+  },
+  {
+    id: 'wilson',
+    title: 'Wilson confidence interval',
+    aliases: ['wilson', 'confidence interval default rate'],
+    group: 'Calibration',
+    summary: 'Binomial proportion confidence interval used for observed default rates.',
+    interpretation: ['Wider intervals indicate greater uncertainty, typically because a bin contains fewer observations or defaults.'],
+    implementation: ['RiskLab computes 95% Wilson intervals for observed default rates in calibration bins.'],
+    limitations: ['The interval describes uncertainty in the observed rate, not uncertainty in model parameters or predicted PDs.'],
+    related: ['calibration-curve'],
+  },
+  {
+    id: 'psi',
+    title: 'Population Stability Index (PSI)',
+    aliases: ['psi', 'population stability index', 'stability index'],
+    group: 'Stability',
+    summary: 'Measures distribution shift between a reference population and a comparison population.',
+    formula: 'PSI = Σ (comparison_share − reference_share) · ln(comparison_share / reference_share)',
+    interpretation: ['RiskLab default heuristic: PSI < 0.10 low shift.', '0.10–0.25 moderate shift.', '> 0.25 high shift.'],
+    implementation: ['Numeric bin edges are defined from reference-population quantiles and reused for comparison.', 'Categorical variables use categories plus Other where needed.', 'Missing is treated as a separate bucket.', 'Small epsilon smoothing avoids division by zero.'],
+    limitations: ['The 0.10/0.25 thresholds are heuristics, not universal regulatory rules.', 'PSI depends on binning and sample size and does not explain the cause of drift.'],
+    related: ['missing-rate'],
+  },
+  {
+    id: 'pearson',
+    title: 'Pearson correlation',
+    aliases: ['pearson', 'pearson r', 'correlation'],
+    group: 'EDA',
+    summary: 'Measures the strength and direction of a linear relationship between two numeric variables.',
+    formula: 'r = cov(X,Y) / (σX · σY)',
+    interpretation: ['Values range from −1 to 1.', 'The sign gives direction; absolute magnitude gives linear association strength.'],
+    implementation: ['RiskLab computes Pearson correlation on paired non-missing numeric values from the EDA sample.'],
+    limitations: ['Correlation does not imply causation.', 'Pearson correlation can miss strong nonlinear relationships and is sensitive to outliers.'],
+    related: ['cramers-v', 'eta'],
+  },
+  {
+    id: 'cramers-v',
+    title: "Cramér's V",
+    aliases: ['cramers v', 'cramér', 'categorical association'],
+    group: 'EDA',
+    summary: 'Measures association strength between two categorical variables using the chi-squared contingency-table statistic.',
+    formula: 'V = √[(χ² / n) / min(r − 1, c − 1)]',
+    interpretation: ['Values range from 0 to 1.', '0 indicates no detected association; larger values indicate stronger association.'],
+    implementation: ['RiskLab calculates V for categorical/boolean pairs when cardinality is manageable.'],
+    limitations: ['It has no direction or sign.', 'Large samples can make small relationships statistically detectable even when practical association is weak.'],
+    related: ['pearson', 'eta'],
+  },
+  {
+    id: 'eta',
+    title: 'Correlation ratio η',
+    aliases: ['eta', 'correlation ratio', 'η'],
+    group: 'EDA',
+    summary: 'Measures how strongly a categorical grouping explains variation in a numeric variable.',
+    formula: 'η = √(between-group sum of squares / total sum of squares)',
+    interpretation: ['Values range from 0 to 1.', 'Higher values mean numeric values differ more strongly between categories.'],
+    implementation: ['RiskLab uses η for mixed numeric–categorical relationships in the EDA association heatmap.'],
+    limitations: ['η gives strength but not direction.', 'Association does not imply causation.'],
+    related: ['pearson', 'cramers-v'],
+  },
+  {
+    id: 'missing-rate',
+    title: 'Missing rate',
+    aliases: ['missing', 'missingness', 'null rate'],
+    group: 'EDA',
+    summary: 'Share of observations for which a variable is missing according to RiskLab missing-value rules.',
+    formula: 'Missing rate = missing observations / all observations',
+    interpretation: ['Higher missingness can reduce usable sample size and may indicate data-quality or population-change issues.'],
+    implementation: ['RiskLab treats empty values and common markers such as NA, N/A, null, none and NaN as missing in EDA.'],
+    limitations: ['A missing rate alone does not identify the missingness mechanism (MCAR, MAR or MNAR).'],
+    related: ['psi'],
+  },
+  {
+    id: 'univariate-auc',
+    title: 'Univariate AUC',
+    aliases: ['univariate auc', 'single variable auc', 'category logit auc'],
+    group: 'EDA',
+    summary: 'Descriptive measure of how well one variable by itself ranks the configured default target.',
+    interpretation: ['For numeric variables RiskLab direction-normalizes the displayed value to at least 0.5.', 'For categorical variables observations are scored by smoothed category default-rate logits.'],
+    implementation: ['Calculated on the EDA reservoir sample.', 'Categorical smoothing uses (defaults + 0.5) / (count + 1) before the logit transform.'],
+    limitations: ['It is in-sample and descriptive, not model-validation evidence.', 'Categorical AUC can be optimistic for high-cardinality variables.'],
+    related: ['roc-auc'],
+  },
+]
+
+const methodologyGroups: MethodologyEntry['group'][] = ['Discrimination', 'Calibration', 'Stability', 'EDA']
+
 const metrics = [
-  { label: 'AUC', value: '0.784', delta: '+0.012', tone: 'positive' },
-  { label: 'Gini', value: '0.568', delta: '+0.015', tone: 'positive' },
-  { label: 'KS', value: '0.421', delta: '+0.008', tone: 'positive' },
-  { label: 'Brier score', value: '0.039', delta: '-0.003', tone: 'negative' },
-  { label: 'Observations', value: '125,430', delta: '12 features', tone: 'neutral' },
-  { label: 'Default rate', value: '3.2%', delta: '4,015 defaults', tone: 'neutral' },
+  { label: 'AUC', value: '0.784', delta: '+0.012', tone: 'positive', help: 'roc-auc' },
+  { label: 'Gini', value: '0.568', delta: '+0.015', tone: 'positive', help: 'gini' },
+  { label: 'KS', value: '0.421', delta: '+0.008', tone: 'positive', help: 'ks' },
+  { label: 'Brier score', value: '0.039', delta: '-0.003', tone: 'negative', help: 'brier' },
+  { label: 'Observations', value: '125,430', delta: '12 features', tone: 'neutral', help: null },
+  { label: 'Default rate', value: '3.2%', delta: '4,015 defaults', tone: 'neutral', help: null },
 ]
 
 const analysisCopy: Record<AnalysisSection, { title: string; description: string; action: string }> = {
@@ -501,6 +744,33 @@ function EChart({ option, height = 360, group }: { option: echarts.EChartsOption
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
+    if (activeSection !== 'Methodology' || !methodologyTarget) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(`methodology-${methodologyTarget}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeSection, methodologyTarget])
+
+  const openMethodology = (metric: string) => {
+    setMethodologyTarget(metric)
+    setMethodologySearch('')
+    setActiveSection('Methodology')
+  }
+
+  const metricHelp = (metric: string, label: string) => (
+    <button
+      type="button"
+      className="metric-help-button"
+      title={`Open methodology for ${label}`}
+      aria-label={`Open methodology for ${label}`}
+      onClick={(event) => {
+        event.stopPropagation()
+        openMethodology(metric)
+      }}
+    >?</button>
+  )
+
+  useEffect(() => {
     if (!ref.current) return
     const chart = echarts.init(ref.current)
     if (group) {
@@ -566,6 +836,8 @@ function MiniLineChart({ data, valueSuffix = '' }: { data: { label: string; valu
 
 function App() {
   const [activeSection, setActiveSection] = useState<Section>('Overview')
+  const [methodologySearch, setMethodologySearch] = useState('')
+  const [methodologyTarget, setMethodologyTarget] = useState('')
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -578,7 +850,10 @@ function App() {
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
   const [edaError, setEdaError] = useState<string | null>(null)
   const [edaTab, setEdaTab] = useState<EdaTab>('Overview')
-  const [edaColumn, setEdaColumn] = useState<string>('')
+  const [distributionFilter, setDistributionFilter] = useState<'all' | 'numeric' | 'categorical' | 'other'>('all')
+  const [distributionSearch, setDistributionSearch] = useState('')
+  const [distributionSort, setDistributionSort] = useState<'dataset' | 'missing' | 'auc' | 'name'>('dataset')
+  const [distributionDetailColumn, setDistributionDetailColumn] = useState('')
   const [edaTimeVariable, setEdaTimeVariable] = useState<string>('')
   const [edaTimeMissingColumn, setEdaTimeMissingColumn] = useState<string>('')
   const [timeGranularity, setTimeGranularity] = useState<TimeGranularity>('monthly')
@@ -610,6 +885,8 @@ function App() {
   const [stabilityVariable, setStabilityVariable] = useState('')
   const [stabilityGranularity, setStabilityGranularity] = useState<TimeGranularity>('monthly')
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
+  const [validationParsingWarnings, setValidationParsingWarnings] = useState<ValidationParsingWarning[]>([])
+  const [validationRunError, setValidationRunError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -644,7 +921,10 @@ function App() {
     setEdaResult(null)
     setEdaError(null)
     setEdaTab('Overview')
-    setEdaColumn('')
+    setDistributionFilter('all')
+    setDistributionSearch('')
+    setDistributionSort('dataset')
+    setDistributionDetailColumn('')
     setEdaTimeVariable('')
     setEdaTimeMissingColumn('')
     setQualitySort('missing')
@@ -675,6 +955,8 @@ function App() {
     setStabilityVariable('')
     setStabilityGranularity('monthly')
     setValidationConfigMessage(null)
+    setValidationParsingWarnings([])
+    setValidationRunError(null)
   }
 
   const invalidateAnalysisResults = () => {
@@ -695,7 +977,7 @@ function App() {
     setStabilityComparison('')
     setStabilityVariable('')
     setEdaTab('Overview')
-    setEdaColumn('')
+    setDistributionDetailColumn('')
     setPopulationColumn('')
     setPopulationReference('')
     setPopulationComparison('')
@@ -703,6 +985,8 @@ function App() {
     setTimeWorkspace([])
     setDiscriminationSegmentKey('')
     setDiscriminationTimeSegmentKey('overall')
+    setValidationParsingWarnings([])
+    setValidationRunError(null)
   }
 
   const exportValidationConfig = () => {
@@ -895,6 +1179,51 @@ function App() {
   }
 
 
+  const runValidation = async () => {
+    if (!preview || !requiredConfigReady) return
+
+    setAnalysisStatus((current) => ({ ...current, Validation: 'running' }))
+    setValidationRunError(null)
+    setValidationParsingWarnings([])
+
+    const formData = new FormData()
+    formData.append('dataset_id', preview.dataset_id)
+    formData.append('config', JSON.stringify(validationConfig))
+
+    try {
+      const response = await fetch('http://localhost:8000/validation/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as ValidationRunResult
+
+      setValidationConfig((current) => ({
+        ...current,
+        semanticTypes: {
+          ...current.semanticTypes,
+          ...result.effective_semantic_types,
+        },
+      }))
+      setValidationParsingWarnings(result.warnings)
+
+      setAnalysisStatus((current) => {
+        const next = { ...current, Validation: 'ready' as AnalysisStatus }
+        analysisSections.forEach((item) => {
+          if (item !== 'Validation') {
+            next[item] = item === 'Calibration' && validationConfig.predictionType === 'score'
+              ? 'unavailable'
+              : 'not-run'
+          }
+        })
+        return next
+      })
+      setLastRun((current) => ({ ...current, Validation: new Date().toLocaleString() }))
+    } catch (err) {
+      setValidationRunError(err instanceof Error ? err.message : 'Validation failed.')
+      setAnalysisStatus((current) => ({ ...current, Validation: 'failed' }))
+    }
+  }
+
+
   const runEda = async () => {
     if (!preview || !validationReady) return
 
@@ -912,7 +1241,6 @@ function App() {
       if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
       const result = body as EdaResult
       setEdaResult(result)
-      setEdaColumn((current) => current || result.profiles.find((profile) => profile.semantic_type !== 'ignore')?.column || '')
       setEdaTimeVariable((current) => current || result.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column || '')
       setEdaTimeMissingColumn((current) => current || result.profiles.find((profile) => profile.missing_count > 0)?.column || result.profiles[0]?.column || '')
       const firstPopulation = result.population_comparison[0]
@@ -1025,6 +1353,114 @@ function App() {
     }
   }
 
+  const renderMethodology = () => {
+    const query = methodologySearch.trim().toLowerCase()
+    const filtered = methodologyEntries.filter((entry) => {
+      if (!query) return true
+      return [entry.title, entry.group, entry.summary, ...entry.aliases, ...entry.related]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    })
+
+    const visibleGroups = methodologyGroups
+      .map((group) => ({ group, entries: filtered.filter((entry) => entry.group === group) }))
+      .filter((item) => item.entries.length > 0)
+
+    return (
+      <section className="page-content methodology-page">
+        <div className="analysis-page-header">
+          <div>
+            <p className="eyebrow">Reference</p>
+            <h1>Methodology</h1>
+            <p>Definitions, interpretation, implementation details and limitations for metrics used across RiskLab.</p>
+          </div>
+        </div>
+
+        <section className="panel methodology-search-card">
+          <div>
+            <h2>Metric reference</h2>
+            <p>Search by metric name, abbreviation or concept. Help icons across RiskLab link directly to these entries.</p>
+          </div>
+          <input
+            className="methodology-search"
+            value={methodologySearch}
+            onChange={(event) => setMethodologySearch(event.target.value)}
+            placeholder="Search AUC, PSI, Spiegelhalter, correlation…"
+          />
+        </section>
+
+        <div className="methodology-layout">
+          <aside className="panel methodology-index">
+            <strong>Contents</strong>
+            {methodologyGroups.map((group) => (
+              <div key={group}>
+                <span>{group}</span>
+                {methodologyEntries.filter((entry) => entry.group === group).map((entry) => (
+                  <button key={entry.id} onClick={() => {
+                    setMethodologySearch('')
+                    setMethodologyTarget(entry.id)
+                    window.setTimeout(() => document.getElementById(`methodology-${entry.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+                  }}>{entry.title}</button>
+                ))}
+              </div>
+            ))}
+          </aside>
+
+          <div className="methodology-content">
+            {visibleGroups.map(({ group, entries }) => (
+              <section key={group} className="methodology-group">
+                <div className="methodology-group-heading"><p className="eyebrow">{group}</p><h2>{group} metrics</h2></div>
+                {entries.map((entry) => (
+                  <article id={`methodology-${entry.id}`} className="panel methodology-entry" key={entry.id}>
+                    <div className="methodology-entry-head">
+                      <div><h3>{entry.title}</h3><p>{entry.summary}</p></div>
+                      <span className="methodology-anchor">#{entry.id}</span>
+                    </div>
+
+                    {entry.formula && (
+                      <div className="methodology-block">
+                        <h4>Formula</h4>
+                        <code>{entry.formula}</code>
+                      </div>
+                    )}
+
+                    <div className="methodology-columns">
+                      <div className="methodology-block">
+                        <h4>Interpretation</h4>
+                        <ul>{entry.interpretation.map((item) => <li key={item}>{item}</li>)}</ul>
+                      </div>
+                      <div className="methodology-block">
+                        <h4>RiskLab implementation</h4>
+                        <ul>{entry.implementation.map((item) => <li key={item}>{item}</li>)}</ul>
+                      </div>
+                    </div>
+
+                    <div className="methodology-block methodology-limitations">
+                      <h4>Important limitations</h4>
+                      <ul>{entry.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+                    </div>
+
+                    {entry.related.length > 0 && (
+                      <div className="methodology-related">
+                        <span>Related</span>
+                        {entry.related.map((related) => {
+                          const target = methodologyEntries.find((item) => item.id === related)
+                          return target ? <button key={related} onClick={() => openMethodology(related)}>{target.title}</button> : null
+                        })}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </section>
+            ))}
+            {visibleGroups.length === 0 && <div className="panel eda-no-data">No methodology entries match “{methodologySearch}”.</div>}
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   const renderDataPage = () => (
     <section className="page-content">
       <div className="page-heading compact-heading">
@@ -1086,7 +1522,7 @@ function App() {
         <div className="header-actions"><button className="secondary-button">Version 1.0⌄</button><button className="secondary-button">Validation run&nbsp;&nbsp;<strong>2024-12-01</strong></button><button className="primary-button">▷ Run validation</button></div>
       </div>
       <div className="tabs"><button className="active">Summary</button><button>Key metrics</button><button>Charts</button><button>Data quality</button><button>Recent findings</button></div>
-      <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
+      <div className="metric-grid">{metrics.map((metric) => <article className="metric-card" key={metric.label}><span className={metric.help ? 'metric-label-with-help' : undefined}>{metric.label}{metric.help ? <> {metricHelp(metric.help, metric.label)}</> : null}</span><strong>{metric.value}</strong><small className={metric.tone}>{metric.delta}</small></article>)}</div>
       <div className="chart-grid">
         <article className="panel chart-card"><div className="panel-title"><h2>ROC Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="30" className="dash-line"/><path d="M50,200 C90,105 165,65 250,49 C345,31 450,27 560,25" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model (AUC = 0.784)</div></article>
         <article className="panel chart-card"><div className="panel-title"><h2>Calibration Curve</h2><span>•••</span></div><svg viewBox="0 0 600 240" className="chart-svg"><line x1="50" y1="200" x2="560" y2="25" className="dash-line"/><polyline points="50,198 115,179 185,163 255,139 330,122 405,110 480,86 560,52" className="main-line"/><line x1="50" y1="200" x2="560" y2="200" className="axis"/><line x1="50" y1="200" x2="50" y2="25" className="axis"/></svg><div className="chart-legend"><span className="legend-blue"/>Model calibration</div></article>
@@ -1114,6 +1550,8 @@ function App() {
             <div className={`analysis-status-pill ${analysisStatus.Validation}`}><span />{statusLabel(analysisStatus.Validation)}</div>
           </div>
         </div>
+
+        {validationRunError && <div className="message error-message">{validationRunError}</div>}
 
         {validationConfigMessage && (
           <div className={`validation-config-message ${validationConfigMessage.tone}`}>
@@ -1165,7 +1603,25 @@ function App() {
               </div>
             ))}
           </div>
-          <div className="type-note">Detected types are suggestions only. RiskLab never infers business meaning from a column name; the semantic type remains under user control.</div>
+          <div className="type-note">Detected types are suggestions only. RiskLab never infers business meaning from a column name. On Run validation, incompatible semantic types fall back to the detected physical type and are reported as warnings.</div>
+          {validationParsingWarnings.length > 0 && (
+            <div className="validation-parsing-warnings">
+              <div className="validation-parsing-warnings-head">
+                <strong>Semantic type parsing warnings</strong>
+                <span>{validationParsingWarnings.length} column{validationParsingWarnings.length === 1 ? '' : 's'} adjusted</span>
+              </div>
+              {validationParsingWarnings.map((warning) => (
+                <div className="validation-parsing-warning" key={warning.column}>
+                  <div>
+                    <strong>{warning.column}</strong>
+                    <span>{warning.requested_semantic_type} → {warning.effective_semantic_type}</span>
+                  </div>
+                  <p>{warning.message}</p>
+                  {warning.invalid_examples.length > 0 && <small>Examples: {warning.invalid_examples.map((value) => `"${value}"`).join(', ')}</small>}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="panel setup-card optional-card">
@@ -1209,7 +1665,7 @@ function App() {
 
         <div className="run-footer">
           <div><strong>{requiredConfigReady ? 'Configuration ready' : 'Complete the required fields'}</strong><span>{requiredConfigReady ? 'RiskLab can now run structural validation.' : 'Choose model output, target and default class to continue.'}</span></div>
-          <button className="primary-button run-button" disabled={!requiredConfigReady || analysisStatus.Validation === 'running'} onClick={() => runAnalysis('Validation')}>{analysisStatus.Validation === 'running' ? 'Running…' : analysisStatus.Validation === 'ready' ? 'Run validation again' : 'Run validation'}</button>
+          <button className="primary-button run-button" disabled={!requiredConfigReady || analysisStatus.Validation === 'running'} onClick={runValidation}>{analysisStatus.Validation === 'running' ? 'Running…' : analysisStatus.Validation === 'ready' ? 'Run validation again' : 'Run validation'}</button>
         </div>
       </section>
     )
@@ -1223,7 +1679,7 @@ function App() {
       return (
         <section className="page-content analysis-module-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic data profiling based on the semantic column types configured in Validation.</p></div>
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Profile data structure, distributions and quality, with optional target-aware univariate diagnostics.</p></div>
             <div className="analysis-status-pill blocked"><span />Blocked</div>
           </div>
           <section className="panel analysis-run-card">
@@ -1237,7 +1693,6 @@ function App() {
     }
 
     const status = analysisStatus.EDA
-    const activeProfile = edaResult?.profiles.find((profile) => profile.column === edaColumn)
     const tabs: EdaTab[] = ['Overview', 'Data quality', 'Distributions', 'Relationships', 'Population comparison', 'Time analysis', 'Missingness']
     const populationEnabled = validationConfig.populationColumns.length > 0
     const timeEnabled = Boolean(validationConfig.timeColumn)
@@ -1246,7 +1701,7 @@ function App() {
       return (
         <section className="page-content eda-page">
           <div className="analysis-page-header">
-            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Generic profiling only — no credit-risk-specific interpretation is applied here.</p></div>
+            <div><p className="eyebrow">EDA</p><h1>Exploratory Data Analysis</h1><p>Explore data quality and distributions. Univariate AUC is shown as descriptive target-aware context, not as model validation evidence.</p></div>
             <div className="eda-header-actions">
               <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
               <button className="primary-button" disabled={status === 'running'} onClick={runEda}>{status === 'running' ? 'Running…' : 'Run EDA'}</button>
@@ -1337,6 +1792,38 @@ function App() {
         lineStyle: { width: 2, color: '#6ea8ff' },
       }],
     })
+
+    const distributionProfiles = edaResult.profiles
+      .filter((profile) => profile.semantic_type !== 'ignore')
+      .filter((profile) => {
+        if (distributionFilter === 'numeric') return ['continuous', 'ordinal'].includes(profile.semantic_type)
+        if (distributionFilter === 'categorical') return ['categorical', 'boolean'].includes(profile.semantic_type)
+        if (distributionFilter === 'other') return ['identifier', 'datetime', 'text'].includes(profile.semantic_type)
+        return true
+      })
+      .filter((profile) => profile.column.toLowerCase().includes(distributionSearch.trim().toLowerCase()))
+
+    const distributionOrder = new Map(edaResult.profiles.map((profile, index) => [profile.column, index]))
+    distributionProfiles.sort((a, b) => {
+      if (distributionSort === 'missing') return b.missing_rate - a.missing_rate
+      if (distributionSort === 'auc') return (b.univariate_auc ?? -1) - (a.univariate_auc ?? -1)
+      if (distributionSort === 'name') return a.column.localeCompare(b.column)
+      return (distributionOrder.get(a.column) ?? 0) - (distributionOrder.get(b.column) ?? 0)
+    })
+
+    const distributionDetailProfile = edaResult.profiles.find((profile) => profile.column === distributionDetailColumn)
+
+    const miniBars = (profile: EdaProfile) => {
+      const values = profile.numeric_summary
+        ? profile.numeric_summary.histogram.map((item) => item.count)
+        : (profile.categories ?? []).slice(0, 8).map((item) => item.count)
+      const max = Math.max(1, ...values)
+      return (
+        <div className="distribution-mini-bars" aria-hidden="true">
+          {values.map((value, index) => <span key={index} style={{ height: `${Math.max(5, value / max * 100)}%` }} />)}
+        </div>
+      )
+    }
 
     const relationshipLookup = new Map(
       edaResult.relationships.flatMap((item) => [
@@ -1559,43 +2046,122 @@ function App() {
             )}
 
             {edaTab === 'Distributions' && (
-              <section className="panel eda-section">
-                <div className="eda-control-row">
-                  <div><h2>Column explorer</h2><p>Numeric and categorical distributions include a separate Missing bucket. Log view uses a logarithmic count axis.</p></div>
-                  <label className="form-field compact-field"><span>Column</span><select value={edaColumn} onChange={(e) => setEdaColumn(e.target.value)}>{edaResult.profiles.filter((profile) => profile.semantic_type !== 'ignore').map((profile) => <option key={profile.column}>{profile.column}</option>)}</select></label>
-                </div>
-                {activeProfile && (
-                  <div className="eda-column-explorer">
-                    <div className="eda-inline-stats">
-                      <div><span>Type</span><strong>{activeProfile.semantic_type}</strong></div>
-                      <div><span>Missing</span><strong>{formatPercent(activeProfile.missing_rate)}</strong></div>
-                      <div><span>Unique</span><strong>{activeProfile.unique_count_capped ? '>10k' : (activeProfile.unique_count ?? '—')}</strong></div>
+              <section className="panel eda-section distribution-gallery-section">
+                <div className="eda-control-row distribution-gallery-header">
+                  <div>
+                    <h2>Distribution gallery</h2>
+                    <p>Scan all variables at once. Univariate AUC uses the configured default target and the EDA sample; click any card for a detailed view.</p>
+                  </div>
+                  <div className="distribution-gallery-controls">
+                    <div className="segmented-control">
+                      <button className={distributionFilter === 'all' ? 'active' : ''} onClick={() => setDistributionFilter('all')}>All</button>
+                      <button className={distributionFilter === 'numeric' ? 'active' : ''} onClick={() => setDistributionFilter('numeric')}>Numeric</button>
+                      <button className={distributionFilter === 'categorical' ? 'active' : ''} onClick={() => setDistributionFilter('categorical')}>Categorical</button>
+                      <button className={distributionFilter === 'other' ? 'active' : ''} onClick={() => setDistributionFilter('other')}>Other</button>
                     </div>
-                    {activeProfile.numeric_summary && (
-                      <>
-                        <div className="eda-inline-stats wide">
-                          <div><span>Mean</span><strong>{formatMetric(activeProfile.numeric_summary.mean)}</strong></div>
-                          <div><span>Median</span><strong>{formatMetric(activeProfile.numeric_summary.median)}</strong></div>
-                          <div><span>Std</span><strong>{formatMetric(activeProfile.numeric_summary.std)}</strong></div>
-                          <div><span>P25</span><strong>{formatMetric(activeProfile.numeric_summary.p25)}</strong></div>
-                          <div><span>P75</span><strong>{formatMetric(activeProfile.numeric_summary.p75)}</strong></div>
-                          <div><span>Min / max</span><strong>{formatMetric(activeProfile.numeric_summary.min)} / {formatMetric(activeProfile.numeric_summary.max)}</strong></div>
-                        </div>
-                        <div className="eda-chart-grid distribution-grid">
-                          <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
-                          <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
-                        </div>
-                        <article className="eda-chart-panel cdf-panel"><div><h3>Empirical cumulative distribution</h3><p className="eda-muted">CDF is calculated from the EDA reservoir sample.</p></div><EChart option={cdfOption(activeProfile)} height={390} /></article>
-                      </>
-                    )}
-                    {activeProfile.categories && (
-                      <div className="eda-chart-grid distribution-grid">
-                        <article className="eda-chart-panel"><h3>Category counts · linear scale</h3><EChart option={histogramOption(activeProfile, false)} /></article>
-                        <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(activeProfile, true)} /></article>
+                    <input className="relationship-search" value={distributionSearch} onChange={(e) => setDistributionSearch(e.target.value)} placeholder="Search variables…" />
+                    <label className="form-field compact-field"><span>Sort by</span><select value={distributionSort} onChange={(e) => setDistributionSort(e.target.value as 'dataset' | 'missing' | 'auc' | 'name')}><option value="dataset">Dataset order</option><option value="missing">Missing rate</option><option value="auc">Univariate AUC</option><option value="name">Name</option></select></label>
+                  </div>
+                </div>
+
+                <div className="distribution-card-grid">
+                  {distributionProfiles.map((profile) => (
+                    <button
+                      type="button"
+                      className="distribution-card"
+                      key={profile.column}
+                      onClick={() => setDistributionDetailColumn(profile.column)}
+                    >
+                      <div className="distribution-card-head">
+                        <div><strong>{profile.column}</strong><span>{profile.semantic_type}</span></div>
+                        {profile.univariate_auc !== null && <span className="distribution-auc">AUC {profile.univariate_auc.toFixed(3)} {metricHelp('univariate-auc', 'Univariate AUC')}</span>}
                       </div>
-                    )}
-                    {activeProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{activeProfile.uniqueness_rate === null || activeProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(activeProfile.uniqueness_rate)}</strong></div>}
-                    {activeProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(activeProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(activeProfile.text_summary.median_length)}</strong>, max <strong>{activeProfile.text_summary.max_length}</strong>.</div>}
+
+                      {(profile.numeric_summary || profile.categories) ? miniBars(profile) : (
+                        <div className="distribution-card-placeholder">{profile.semantic_type === 'identifier' ? 'Identifier' : profile.semantic_type === 'text' ? 'Text' : 'No histogram'}</div>
+                      )}
+
+                      {profile.numeric_summary && (
+                        <div className="distribution-card-stats">
+                          <span><b>Mean</b>{formatMetric(profile.numeric_summary.mean)}</span>
+                          <span><b>Median</b>{formatMetric(profile.numeric_summary.median)}</span>
+                          <span><b>Range</b>{formatMetric(profile.numeric_summary.min)}–{formatMetric(profile.numeric_summary.max)}</span>
+                          <span><b>Missing</b>{formatPercent(profile.missing_rate)}</span>
+                        </div>
+                      )}
+
+                      {profile.categories && (
+                        <div className="distribution-card-stats">
+                          <span><b>Unique</b>{profile.unique_count_capped ? '>10k' : (profile.unique_count ?? '—')}</span>
+                          <span><b>Top share</b>{profile.categories[0] ? formatPercent(profile.categories[0].share) : '—'}</span>
+                          <span><b>Missing</b>{formatPercent(profile.missing_rate)}</span>
+                          <span><b>Logit AUC</b>{profile.univariate_auc === null ? '—' : profile.univariate_auc.toFixed(3)}</span>
+                        </div>
+                      )}
+
+                      {profile.semantic_type === 'identifier' && <div className="distribution-card-stats"><span><b>Unique</b>{profile.unique_count_capped ? '>10k' : (profile.unique_count ?? '—')}</span><span><b>Missing</b>{formatPercent(profile.missing_rate)}</span></div>}
+                      {profile.text_summary && <div className="distribution-card-stats"><span><b>Mean length</b>{formatMetric(profile.text_summary.mean_length)}</span><span><b>Max length</b>{profile.text_summary.max_length}</span><span><b>Missing</b>{formatPercent(profile.missing_rate)}</span></div>}
+                    </button>
+                  ))}
+                </div>
+
+                {distributionProfiles.length === 0 && <div className="eda-no-data">No variables match the current distribution filters.</div>}
+
+                {distributionDetailProfile && (
+                  <div className="distribution-modal-backdrop" role="presentation" onClick={() => setDistributionDetailColumn('')}>
+                    <div className="distribution-modal" role="dialog" aria-modal="true" aria-label={`Distribution details for ${distributionDetailProfile.column}`} onClick={(event) => event.stopPropagation()}>
+                      <div className="distribution-modal-head">
+                        <div><p className="eyebrow">Distribution detail</p><h2>{distributionDetailProfile.column}</h2><p>{distributionDetailProfile.semantic_type} · sample n={edaResult.sample_size.toLocaleString()}</p></div>
+                        <button className="secondary-button compact-button" onClick={() => setDistributionDetailColumn('')}>Close</button>
+                      </div>
+
+                      <div className="eda-inline-stats">
+                        <div><span>Type</span><strong>{distributionDetailProfile.semantic_type}</strong></div>
+                        <div><span>Missing</span><strong>{formatPercent(distributionDetailProfile.missing_rate)}</strong></div>
+                        <div><span>Unique</span><strong>{distributionDetailProfile.unique_count_capped ? '>10k' : (distributionDetailProfile.unique_count ?? '—')}</strong></div>
+                        <div><span className="metric-label-with-help">Univariate AUC {metricHelp('univariate-auc', 'Univariate AUC')}</span><strong>{distributionDetailProfile.univariate_auc === null ? '—' : distributionDetailProfile.univariate_auc.toFixed(3)}</strong></div>
+                      </div>
+
+                      {distributionDetailProfile.numeric_summary && (
+                        <>
+                          <div className="eda-inline-stats wide">
+                            <div><span>Mean</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.mean)}</strong></div>
+                            <div><span>Median</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.median)}</strong></div>
+                            <div><span>Std</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.std)}</strong></div>
+                            <div><span>P25</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.p25)}</strong></div>
+                            <div><span>P75</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.p75)}</strong></div>
+                            <div><span>Min / max</span><strong>{formatMetric(distributionDetailProfile.numeric_summary.min)} / {formatMetric(distributionDetailProfile.numeric_summary.max)}</strong></div>
+                          </div>
+                          <div className="eda-info-card">AUC direction: <strong>{distributionDetailProfile.auc_direction === 'lower-is-riskier' ? 'lower values are riskier' : 'higher values are riskier'}</strong>. The displayed AUC is direction-normalized to be at least 0.5 and is calculated on the EDA sample.</div>
+                          <div className="eda-chart-grid distribution-grid">
+                            <article className="eda-chart-panel"><h3>Histogram · linear count scale</h3><EChart option={histogramOption(distributionDetailProfile, false)} /></article>
+                            <article className="eda-chart-panel"><h3>Histogram · logarithmic count scale</h3><EChart option={histogramOption(distributionDetailProfile, true)} /></article>
+                          </div>
+                          <article className="eda-chart-panel cdf-panel"><div><h3>Empirical cumulative distribution</h3><p className="eda-muted">CDF is calculated from the EDA reservoir sample.</p></div><EChart option={cdfOption(distributionDetailProfile)} height={390} /></article>
+                        </>
+                      )}
+
+                      {distributionDetailProfile.categories && (
+                        <>
+                          <div className="eda-chart-grid distribution-grid">
+                            <article className="eda-chart-panel"><h3>Category counts · linear scale</h3><EChart option={histogramOption(distributionDetailProfile, false)} /></article>
+                            <article className="eda-chart-panel"><h3>Category counts · logarithmic scale</h3><EChart option={histogramOption(distributionDetailProfile, true)} /></article>
+                          </div>
+                          <div className="category-logit-section">
+                            <div><h3>Category logit diagnostics</h3><p className="eda-muted">Each category is scored with its smoothed observed default-rate logit. The variable-level AUC measures how well those category logits rank the configured target. This is an in-sample descriptive diagnostic and can be optimistic for high-cardinality variables.</p></div>
+                            <div className="table-wrap">
+                              <table>
+                                <thead><tr><th>Category</th><th>Count</th><th>Defaults</th><th>Default rate</th><th>Smoothed logit</th></tr></thead>
+                                <tbody>{distributionDetailProfile.category_logits.map((row) => <tr key={row.value}><td><strong>{row.value}</strong></td><td>{row.count.toLocaleString()}</td><td>{row.defaults.toLocaleString()}</td><td>{formatPercent(row.default_rate)}</td><td>{row.logit.toFixed(3)}</td></tr>)}</tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {distributionDetailProfile.semantic_type === 'identifier' && <div className="eda-info-card">Uniqueness rate: <strong>{distributionDetailProfile.uniqueness_rate === null || distributionDetailProfile.uniqueness_rate === undefined ? 'Unavailable for very high cardinality' : formatPercent(distributionDetailProfile.uniqueness_rate)}</strong></div>}
+                      {distributionDetailProfile.text_summary && <div className="eda-info-card">Text length — mean <strong>{formatMetric(distributionDetailProfile.text_summary.mean_length)}</strong>, median <strong>{formatMetric(distributionDetailProfile.text_summary.median_length)}</strong>, max <strong>{distributionDetailProfile.text_summary.max_length}</strong>.</div>}
+                    </div>
                   </div>
                 )}
               </section>
@@ -1604,7 +2170,7 @@ function App() {
             {edaTab === 'Relationships' && (
               <section className="panel eda-section relationships-section">
                 <div className="eda-control-row">
-                  <div><h2>Relationship heatmap</h2><p>Numeric view shows signed Pearson correlation. Mixed view shows association strength on a 0–1 scale using |Pearson|, Cramér's V and correlation ratio η.</p></div>
+                  <div><h2>Relationship heatmap</h2><p>Numeric view shows signed Pearson correlation {metricHelp('pearson', 'Pearson correlation')}. Mixed view uses |Pearson|, Cramér's V {metricHelp('cramers-v', "Cramér's V")} and correlation ratio η {metricHelp('eta', 'Correlation ratio eta')}.</p></div>
                   <div className="relationship-controls">
                     <div className="segmented-control">
                       <button className={relationshipMode === 'numeric' ? 'active' : ''} onClick={() => { setRelationshipMode('numeric'); setRelationshipFocus('') }}>Numeric correlations</button>
@@ -1620,7 +2186,7 @@ function App() {
                     <div className="heatmap-meta">Showing {focusedRelationshipColumns.length} of {relationshipBaseColumns.length} variables. Search or choose a focus variable to navigate large matrices.</div>
                     <div className="heatmap-scroll"><EChart option={heatmapOption(relationshipMode)} height={Math.max(520, focusedRelationshipColumns.length * 27 + 190)} /></div>
                     <div className="table-wrap relationship-table">
-                      <table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.filter((item) => relationshipMode === 'mixed' || item.kind === 'Pearson correlation').slice(0, 20).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td>{item.kind}</td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table>
+                      <table><thead><tr><th>Variable A</th><th>Variable B</th><th>Metric</th><th>Score</th></tr></thead><tbody>{edaResult.relationships.filter((item) => relationshipMode === 'mixed' || item.kind === 'Pearson correlation').slice(0, 20).map((item) => <tr key={`${item.left}-${item.right}`}><td>{item.left}</td><td>{item.right}</td><td><span className="metric-label-with-help">{item.kind} {item.kind === 'Pearson correlation' ? metricHelp('pearson', 'Pearson correlation') : item.kind === "Cramér's V" ? metricHelp('cramers-v', "Cramér's V") : metricHelp('eta', 'Correlation ratio eta')}</span></td><td>{formatMetric(item.score)}</td></tr>)}</tbody></table>
                     </div>
                   </>
                 ) : <div className="eda-no-data">No variables match the current relationship view.</div>}
@@ -1630,7 +2196,7 @@ function App() {
             {edaTab === 'Population comparison' && (!populationEnabled ? renderLocked('population') : (
               <section className="panel eda-section population-analysis">
                 <div className="eda-control-row">
-                  <div><h2>Population comparison</h2><p>PSI is calculated for every eligible variable using the selected reference population. Numeric bins are defined on the reference population; Missing is a separate bin.</p></div>
+                  <div><h2 className="heading-with-help">Population comparison {metricHelp('psi', 'Population Stability Index')}</h2><p>PSI is calculated for every eligible variable using the selected reference population. Numeric bins are defined on the reference population; Missing is a separate bin.</p></div>
                   <div className="population-controls">
                     <label className="form-field compact-field"><span>Population column</span><select value={activePopulation?.column ?? ''} onChange={(e) => { const next = edaResult.population_comparison.find((item) => item.column === e.target.value); setPopulationColumn(e.target.value); setPopulationReference(next?.references[0]?.reference ?? ''); setPopulationComparison(next?.references[0]?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.references[0]?.comparisons[0]?.variables[0]?.column ?? '') }}>{edaResult.population_comparison.map((population) => <option key={population.column} value={population.column}>{population.column}</option>)}</select></label>
                     <label className="form-field compact-field"><span>Reference</span><select value={activeReference?.reference ?? ''} onChange={(e) => { const next = activePopulation?.references.find((item) => item.reference === e.target.value); setPopulationReference(e.target.value); setPopulationComparison(next?.comparisons[0]?.comparison ?? ''); setPopulationVariable(next?.comparisons[0]?.variables[0]?.column ?? '') }}>{activePopulation?.references.map((reference) => <option key={reference.reference} value={reference.reference}>{reference.reference}</option>)}</select></label>
@@ -1892,10 +2458,10 @@ function App() {
         {discriminationError && <div className="message error-message">{discriminationError}</div>}
 
         <div className="discrimination-kpis">
-          <article className="metric-card"><span>ROC AUC</span><strong>{formatMetric(result.overall.auc)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
-          <article className="metric-card"><span>Gini</span><strong>{formatMetric(result.overall.gini)}</strong><small className="neutral">2 × AUC − 1</small></article>
-          <article className="metric-card"><span>KS</span><strong>{formatMetric(result.overall.ks)}</strong><small className="neutral">Max cumulative separation</small></article>
-          <article className="metric-card"><span>Bad capture @ 10%</span><strong>{result.overall.bad_capture_10 === null ? '—' : formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">ROC AUC {metricHelp('roc-auc', 'ROC AUC')}</span><strong>{formatMetric(result.overall.auc)}</strong><small className="neutral">{result.overall.observations.toLocaleString()} observations</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Gini {metricHelp('gini', 'Gini')}</span><strong>{formatMetric(result.overall.gini)}</strong><small className="neutral">2 × AUC − 1</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">KS {metricHelp('ks', 'KS')}</span><strong>{formatMetric(result.overall.ks)}</strong><small className="neutral">Max cumulative separation</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Bad capture @ 10% {metricHelp('bad-capture', 'Bad capture at 10%')}</span><strong>{result.overall.bad_capture_10 === null ? '—' : formatPercent(result.overall.bad_capture_10)}</strong><small className="neutral">{result.overall.defaults.toLocaleString()} defaults</small></article>
           <article className="metric-card"><span>Default rate</span><strong>{formatPercent(result.overall.default_rate)}</strong><small className="neutral">Positive class: {validationConfig.positiveClass}</small></article>
         </div>
 
@@ -1904,7 +2470,7 @@ function App() {
           <article className="panel discrimination-chart"><div className="panel-title"><h2>KS cumulative curves</h2></div><EChart option={ksOption} height={380} /></article>
         </div>
 
-        <article className="panel discrimination-chart"><div className="panel-title"><div><h2>CAP / cumulative gains</h2><p className="eda-muted">Shows how quickly the riskiest observations capture observed defaults.</p></div></div><EChart option={capOption} height={390} /></article>
+        <article className="panel discrimination-chart"><div className="panel-title"><div><h2 className="heading-with-help">CAP / cumulative gains {metricHelp('cap', 'CAP / cumulative gains')}</h2><p className="eda-muted">Shows how quickly the riskiest observations capture observed defaults.</p></div></div><EChart option={capOption} height={390} /></article>
 
         {result.segment_performance.length > 0 && (
           <section className="panel discrimination-section segment-performance-section">
@@ -2143,7 +2709,7 @@ function App() {
           </div>
           <div className="table-wrap">
             <table className="calibration-summary-table">
-              <thead><tr><th>Segment</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean PD</th><th>Spiegelhalter p-value</th></tr></thead>
+              <thead><tr><th>Segment</th><th>Observations</th><th>Defaults</th><th>Default rate</th><th>Mean PD</th><th><span className="metric-label-with-help">Spiegelhalter p-value {metricHelp('spiegelhalter', 'Spiegelhalter p-value')}</span></th></tr></thead>
               <tbody>{summaryRows.map((row) => (
                 <tr key={row.value}>
                   <td><strong>{row.value}</strong></td>
@@ -2160,14 +2726,14 @@ function App() {
         </section>
 
         <div className="calibration-kpis">
-          <article className="metric-card"><span>Brier score</span><strong>{formatMetric(result.overall.brier_score)}</strong><small className="neutral">Mean squared probability error</small></article>
-          <article className="metric-card"><span>O / E ratio</span><strong>{formatMetric(result.overall.oe_ratio)}</strong><small className="neutral">Observed / expected defaults</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Brier score {metricHelp('brier', 'Brier score')}</span><strong>{formatMetric(result.overall.brier_score)}</strong><small className="neutral">Mean squared probability error</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">O / E ratio {metricHelp('oe-ratio', 'Observed / Expected ratio')}</span><strong>{formatMetric(result.overall.oe_ratio)}</strong><small className="neutral">Observed / expected defaults</small></article>
           <article className="metric-card"><span>Expected defaults</span><strong>{formatMetric(result.overall.expected_defaults)}</strong><small className="neutral">Σ predicted PD</small></article>
-          <article className="metric-card"><span>Spiegelhalter Z</span><strong>{formatMetric(result.overall.spiegelhalter_z)}</strong><small className="neutral">Two-sided calibration test</small></article>
+          <article className="metric-card"><span className="metric-label-with-help">Spiegelhalter Z {metricHelp('spiegelhalter', 'Spiegelhalter Z-test')}</span><strong>{formatMetric(result.overall.spiegelhalter_z)}</strong><small className="neutral">Two-sided calibration test</small></article>
         </div>
 
         <section className="panel calibration-chart-section">
-          <div className="panel-title"><div><h2>Calibration curve</h2><p className="eda-muted">Ten equal-frequency PD bins. The dashed diagonal represents ideal calibration.</p></div></div>
+          <div className="panel-title"><div><h2 className="heading-with-help">Calibration curve {metricHelp('calibration-curve', 'Calibration curve')}</h2><p className="eda-muted">Ten equal-frequency PD bins. The dashed diagonal represents ideal calibration.</p></div></div>
           <EChart option={calibrationOption} height={440} />
           <div className="calibration-bin-strip">{calibrationBins.map((row) => <span key={row.bin}><strong>Bin {row.bin}</strong><small>PD {formatPercent(row.mean_pd)} · DR {formatPercent(row.observed_default_rate)} · n={row.observations.toLocaleString()}</small></span>)}</div>
         </section>
@@ -2383,10 +2949,10 @@ function App() {
         {activeComparison && (
           <>
             <section className="panel stability-summary-section">
-              <div className="panel-title"><div><h2>PSI summary</h2><p className="eda-muted">Default thresholds are heuristic: PSI &lt; 0.10 low, 0.10–0.25 moderate, &gt; 0.25 high.</p></div></div>
+              <div className="panel-title"><div><h2 className="heading-with-help">PSI summary {metricHelp('psi', 'Population Stability Index')}</h2><p className="eda-muted">Default thresholds are heuristic: PSI &lt; 0.10 low, 0.10–0.25 moderate, &gt; 0.25 high.</p></div></div>
               <div className="table-wrap">
                 <table className="stability-summary-table">
-                  <thead><tr><th>Variable</th><th>PSI</th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Variable</th><th><span className="metric-label-with-help">PSI {metricHelp('psi', 'Population Stability Index')}</span></th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
                   <tbody>{activeComparison.variables.map((variable) => (
                     <tr key={variable.column} className={activeVariable?.column === variable.column ? 'selected-row' : ''} onClick={() => setStabilityVariable(variable.column)}>
                       <td><strong>{variable.column}</strong><small>{variable.semantic_type}</small></td>
@@ -2502,7 +3068,8 @@ function App() {
         {activeSection === 'Discrimination' && renderDiscrimination()}
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && renderAnalysisPage(activeSection)}
+        {activeSection === 'Methodology' && renderMethodology()}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
