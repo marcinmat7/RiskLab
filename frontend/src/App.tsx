@@ -1463,9 +1463,18 @@ function App() {
     }
   }
 
-  const renderFindings = () => {
-    if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
-
+  const collectFindings = (results?: {
+    validationWarnings?: ValidationParsingWarning[]
+    eda?: EdaResult | null
+    discrimination?: DiscriminationResult | null
+    calibration?: CalibrationResult | null
+    stability?: StabilityResult | null
+  }): Finding[] => {
+    const currentValidationWarnings = results?.validationWarnings ?? validationParsingWarnings
+    const currentEda = results?.eda === undefined ? edaResult : results.eda
+    const currentDiscrimination = results?.discrimination === undefined ? discriminationResult : results.discrimination
+    const currentCalibration = results?.calibration === undefined ? calibrationResult : results.calibration
+    const currentStability = results?.stability === undefined ? stabilityResult : results.stability
     const findings: Finding[] = []
     const minN = findingPolicy.global.minimumObservations
     const minDefaults = findingPolicy.global.minimumDefaults
@@ -1486,7 +1495,7 @@ function App() {
       observations >= minN && defaults >= minDefaults && observations - defaults >= minNonDefaults
 
     if (findingPolicy.rules.validation.parsingFailure.enabled) {
-      validationParsingWarnings.forEach((warning) => {
+      currentValidationWarnings.forEach((warning) => {
         if (warning.invalid_count > 0) {
           addFinding(
             `parsing-${warning.column}`,
@@ -1500,19 +1509,19 @@ function App() {
       })
     }
 
-    if (edaResult) {
+    if (currentEda) {
       const missingRule = findingPolicy.rules.dataQuality.missingRate
       const constantRule = findingPolicy.rules.dataQuality.constantVariable
       const dominantRule = findingPolicy.rules.dataQuality.dominantValueShare
-      edaResult.profiles.forEach((profile) => {
-        if (edaResult.overview.rows < minN) return
+      currentEda.profiles.forEach((profile) => {
+        if (currentEda.overview.rows < minN) return
         if (missingRule.enabled && profile.missing_rate > missingRule.yellowAbove) {
           const severity: FindingSeverity = profile.missing_rate > missingRule.redAbove ? 'red' : 'yellow'
           addFinding(
             `missing-${profile.column}`,
             'EDA',
             `High missing rate in ${profile.column}.`,
-            [`Missing ${pct(profile.missing_rate)}`, `n=${edaResult.overview.rows.toLocaleString()}`],
+            [`Missing ${pct(profile.missing_rate)}`, `n=${currentEda.overview.rows.toLocaleString()}`],
             severity,
             `Yellow > ${pct(missingRule.yellowAbove)} · Red > ${pct(missingRule.redAbove)}`,
           )
@@ -1548,21 +1557,21 @@ function App() {
       })
 
       const duplicateRule = findingPolicy.rules.dataQuality.duplicateRate
-      if (duplicateRule.enabled && edaResult.overview.rows >= minN && edaResult.overview.duplicate_rate > duplicateRule.yellowAbove) {
+      if (duplicateRule.enabled && currentEda.overview.rows >= minN && currentEda.overview.duplicate_rate > duplicateRule.yellowAbove) {
         addFinding(
           'duplicate-rows',
           'EDA',
           'Duplicate rows were detected in the dataset.',
-          [`${edaResult.overview.duplicate_rows.toLocaleString()} rows`, `${pct(edaResult.overview.duplicate_rate)} of dataset`],
-          edaResult.overview.duplicate_rate > duplicateRule.redAbove ? 'red' : 'yellow',
+          [`${currentEda.overview.duplicate_rows.toLocaleString()} rows`, `${pct(currentEda.overview.duplicate_rate)} of dataset`],
+          currentEda.overview.duplicate_rate > duplicateRule.redAbove ? 'red' : 'yellow',
           `Yellow > ${pct(duplicateRule.yellowAbove)} · Red > ${pct(duplicateRule.redAbove)}`,
         )
       }
 
       const cutoffRule = findingPolicy.rules.cutoff.missingRateIncrease
-      const daily = edaResult.time_analysis?.granularities.daily ?? []
+      const daily = currentEda.time_analysis?.granularities.daily ?? []
       if (cutoffRule.enabled && validationConfig.timeCutoffDate && daily.length) {
-        edaResult.time_analysis?.numeric_columns.forEach((column) => {
+        currentEda.time_analysis?.numeric_columns.forEach((column) => {
           const pre = daily.filter((bucket) => bucket.bucket < validationConfig.timeCutoffDate)
           const post = daily.filter((bucket) => bucket.bucket >= validationConfig.timeCutoffDate)
           const summarize = (rows: typeof daily) => {
@@ -1588,7 +1597,7 @@ function App() {
       }
     }
 
-    if (discriminationResult) {
+    if (currentDiscrimination) {
       const aucRule = findingPolicy.rules.discrimination.auc
       const assessAuc = (context: string, metrics: { observations: number; defaults: number; auc: number | null }, id: string) => {
         if (!aucRule.enabled || metrics.auc === null || !eligiblePerformance(metrics.observations, metrics.defaults)) return
@@ -1603,16 +1612,16 @@ function App() {
           )
         }
       }
-      assessAuc('Overall', discriminationResult.overall, 'auc-overall')
+      assessAuc('Overall', currentDiscrimination.overall, 'auc-overall')
       if (findingPolicy.global.evaluateSegments) {
-        discriminationResult.segment_performance.forEach((segment) => {
+        currentDiscrimination.segment_performance.forEach((segment) => {
           segment.groups.forEach((group) => assessAuc(`${segment.name}: ${group.value}`, group, `auc-${segment.key}-${group.value}`))
         })
       }
 
       const dropRule = findingPolicy.rules.discrimination.aucDrop
       if (dropRule.enabled && validationConfig.timeCutoffAsSegment) {
-        discriminationResult.segment_performance
+        currentDiscrimination.segment_performance
           .filter((segment) => segment.columns.includes('__time_cutoff__'))
           .forEach((segment) => {
             const beforeSuffix = validationConfig.timeCutoffBeforeLabel
@@ -1645,7 +1654,7 @@ function App() {
       }
     }
 
-    if (calibrationResult) {
+    if (currentCalibration) {
       const spiegelhalter = findingPolicy.rules.calibration.spiegelhalter
       const oe = findingPolicy.rules.calibration.oeRatio
       const gapRule = findingPolicy.rules.calibration.absoluteGap
@@ -1688,21 +1697,21 @@ function App() {
           )
         }
       }
-      assessCalibration('Overall', calibrationResult.overall, 'overall')
+      assessCalibration('Overall', currentCalibration.overall, 'overall')
       if (findingPolicy.global.evaluateSegments) {
-        calibrationResult.segment_performance.forEach((segment) => {
+        currentCalibration.segment_performance.forEach((segment) => {
           segment.groups.forEach((group) => assessCalibration(`${segment.name}: ${group.value}`, group, `${segment.key}-${group.value}`))
         })
       }
     }
 
-    if (stabilityResult) {
+    if (currentStability) {
       const psiRule = findingPolicy.rules.stability.psi
       const missingShiftRule = findingPolicy.rules.stability.missingRateIncrease
-      stabilityResult.sources.forEach((source) => {
+      currentStability.sources.forEach((source) => {
         const defaultReference = source.groups[0]?.value
         if (!defaultReference) return
-        stabilityResult.comparisons
+        currentStability.comparisons
           .filter((comparison) => comparison.source_key === source.key && comparison.reference === defaultReference)
           .forEach((comparison) => {
             if (comparison.reference_observations < minN || comparison.comparison_observations < minN) return
@@ -1738,6 +1747,14 @@ function App() {
       return a.area.localeCompare(b.area) || a.description.localeCompare(b.description)
     })
 
+
+    return findings
+  }
+
+  const renderFindings = () => {
+    if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
+
+    const findings = collectFindings()
     const redCount = findings.filter((finding) => finding.severity === 'red').length
     const yellowCount = findings.filter((finding) => finding.severity === 'yellow').length
 
