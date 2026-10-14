@@ -654,3 +654,66 @@
 @media (max-width: 620px) {
   .finding-policy-global-grid { grid-template-columns: 1fr; }
 }
+
+
+/* Overview workflow */
+.overview-page { max-width: 1540px; }
+.overview-hero { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; padding:22px; }
+.overview-hero h1 { margin:3px 0 6px; color:#eef4fd; font-size:26px; }
+.overview-hero p { margin:0; color:#75869f; }
+.overview-hero-actions { display:flex; gap:9px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+.workflow-steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:14px; }
+.workflow-steps article { display:flex; align-items:center; gap:12px; padding:14px; opacity:.64; }
+.workflow-steps article.active,.workflow-steps article.done { opacity:1; }
+.workflow-steps article>span { display:grid; place-items:center; width:30px; height:30px; border-radius:999px; border:1px solid #2b3b55; color:#8798b1; font-weight:800; }
+.workflow-steps article.active>span { border-color:#4f8cff; color:#9fc4ff; background:rgba(79,140,255,.10); }
+.workflow-steps article.done>span { border-color:rgba(105,231,173,.38); color:#69e7ad; background:rgba(105,231,173,.08); }
+.workflow-steps strong,.workflow-steps small { display:block; }
+.workflow-steps strong { color:#dce6f4; font-size:12px; }
+.workflow-steps small { margin-top:3px; color:#6d7d94; font-size:10px; }
+.overview-run-message { display:flex; align-items:center; gap:12px; margin-top:14px; padding:11px 13px; border:1px solid #29405e; border-radius:10px; background:#0c1625; color:#a9b7ca; font-size:11px; }
+.overview-run-message.ready { border-color:rgba(105,231,173,.28); }
+.overview-run-message.failed { border-color:rgba(255,107,107,.28); }
+.overview-summary-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin-top:14px; }
+.overview-finding-red { color:#ff8b8b; }
+.overview-finding-yellow { color:#f2bc66; }
+.overview-module-status,.overview-findings-preview { margin-top:14px; padding:18px; }
+.overview-module-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; margin-top:12px; }
+.overview-module-grid button { min-width:0; padding:11px; border:1px solid #23334c; border-radius:9px; background:#0b1422; color:#d7e1ef; text-align:left; cursor:pointer; }
+.overview-module-grid button:hover { border-color:#37567f; }
+.overview-module-grid button .nav-analysis-status { display:inline-block; margin-right:6px; }
+.overview-module-grid button strong,.overview-module-grid button small { display:block; }
+.overview-module-grid button strong { margin-top:7px; font-size:11px; }
+.overview-module-grid button small { margin-top:3px; color:#6b7c95; font-size:9px; }
+
+@media(max-width:1200px){
+  .overview-summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .overview-module-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+}
+@media(max-width:760px){
+  .overview-hero { flex-direction:column; }
+  .overview-hero-actions { justify-content:flex-start; }
+  .workflow-steps,.overview-summary-grid,.overview-module-grid { grid-template-columns:1fr; }
+}
+
+/* Reports */
+.reports-page { max-width:1540px; }
+.report-generate-card,.report-ready-card { margin-top:14px; padding:22px; display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
+.report-generate-card h2,.report-ready-card h2 { margin:2px 0 6px; color:#e9f0fb; }
+.report-generate-card p,.report-ready-card p { margin:0; max-width:780px; color:#71809a; font-size:12px; line-height:1.55; }
+.report-ready-actions { display:flex; gap:9px; flex-wrap:wrap; justify-content:flex-end; }
+.report-content-summary { margin-top:14px; padding:18px; }
+.report-content-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.report-content-grid>div { padding:13px; border:1px solid #223149; border-radius:10px; background:#0b1320; }
+.report-content-grid strong,.report-content-grid span { display:block; }
+.report-content-grid strong { color:#dbe6f5; font-size:11px; }
+.report-content-grid span { margin-top:5px; color:#6d7e96; font-size:10px; line-height:1.45; }
+
+@media(max-width:900px){
+  .report-generate-card,.report-ready-card { flex-direction:column; }
+  .report-ready-actions { justify-content:flex-start; }
+  .report-content-grid { grid-template-columns:1fr 1fr; }
+}
+@media(max-width:620px){
+  .report-content-grid { grid-template-columns:1fr; }
+}
