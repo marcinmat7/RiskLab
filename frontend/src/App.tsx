@@ -671,6 +671,8 @@ const initialConfig: ValidationConfig = {
   semanticTypes: {},
 }
 
+const defaultFindingPolicy = defaultFindingPolicyJson as FindingPolicy
+
 const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
   Validation: 'not-run',
   EDA: 'blocked',
@@ -898,6 +900,8 @@ function App() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle')
   const [validationConfig, setValidationConfig] = useState<ValidationConfig>(initialConfig)
+  const [findingPolicy, setFindingPolicy] = useState<FindingPolicy>(defaultFindingPolicy)
+  const [findingPolicyMessage, setFindingPolicyMessage] = useState<string | null>(null)
   const [analysisStatus, setAnalysisStatus] = useState<Record<AnalysisSection, AnalysisStatus>>(initialStatuses)
   const [lastRun, setLastRun] = useState<Partial<Record<AnalysisSection, string>>>({})
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
@@ -1010,6 +1014,7 @@ function App() {
     setValidationConfigMessage(null)
     setValidationParsingWarnings([])
     setValidationRunError(null)
+    setFindingPolicyMessage(null)
   }
 
   const invalidateAnalysisResults = () => {
@@ -1040,6 +1045,7 @@ function App() {
     setDiscriminationTimeSegmentKey('overall')
     setValidationParsingWarnings([])
     setValidationRunError(null)
+    setFindingPolicyMessage(null)
   }
 
   const exportValidationConfig = () => {
@@ -1130,14 +1136,6 @@ function App() {
         sensitiveColumns: existingColumns(raw.sensitiveColumns, 'Sensitive attribute'),
         featureColumns: existingColumns(raw.featureColumns, 'Model feature'),
         semanticTypes,
-        findingPolicy: {
-          missingWatch: typeof raw.findingPolicy?.missingWatch === 'number' ? raw.findingPolicy.missingWatch : initialConfig.findingPolicy.missingWatch,
-          missingReview: typeof raw.findingPolicy?.missingReview === 'number' ? raw.findingPolicy.missingReview : initialConfig.findingPolicy.missingReview,
-          psiModerate: typeof raw.findingPolicy?.psiModerate === 'number' ? raw.findingPolicy.psiModerate : initialConfig.findingPolicy.psiModerate,
-          psiHigh: typeof raw.findingPolicy?.psiHigh === 'number' ? raw.findingPolicy.psiHigh : initialConfig.findingPolicy.psiHigh,
-          spiegelhalterEvidence: typeof raw.findingPolicy?.spiegelhalterEvidence === 'number' ? raw.findingPolicy.spiegelhalterEvidence : initialConfig.findingPolicy.spiegelhalterEvidence,
-          spiegelhalterStrong: typeof raw.findingPolicy?.spiegelhalterStrong === 'number' ? raw.findingPolicy.spiegelhalterStrong : initialConfig.findingPolicy.spiegelhalterStrong,
-        },
       }
 
       if (predictionColumn && targetColumn && predictionColumn === targetColumn) {
@@ -1724,18 +1722,7 @@ function App() {
           </div>
         </section>
 
-        <section className="panel setup-card finding-policy-card">
-          <div className="setup-section-heading"><div><span className="setup-number optional">4</span><div><h2>Finding policy</h2><p>Customize the heuristic thresholds RiskLab uses for warnings and future Findings. Values are saved in Validation config.</p></div></div><span className="optional-badge">Optional</span></div>
-          <div className="finding-policy-grid">
-            <label className="form-field"><span>Missing · Watch above</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.missingWatch} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, missingWatch:Number(e.target.value)}})} /><small>0.05 = 5%</small></label>
-            <label className="form-field"><span>Missing · Review above</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.missingReview} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, missingReview:Number(e.target.value)}})} /><small>0.20 = 20%</small></label>
-            <label className="form-field"><span>PSI · Moderate from</span><input type="number" min="0" step="0.01" value={validationConfig.findingPolicy.psiModerate} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, psiModerate:Number(e.target.value)}})} /></label>
-            <label className="form-field"><span>PSI · High above</span><input type="number" min="0" step="0.01" value={validationConfig.findingPolicy.psiHigh} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, psiHigh:Number(e.target.value)}})} /></label>
-            <label className="form-field"><span>Spiegelhalter · Evidence below p</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.spiegelhalterEvidence} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, spiegelhalterEvidence:Number(e.target.value)}})} /></label>
-            <label className="form-field"><span>Spiegelhalter · Strong below p</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.spiegelhalterStrong} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, spiegelhalterStrong:Number(e.target.value)}})} /></label>
-          </div>
-          <div className="type-note">These are policy defaults, not universal regulatory thresholds. The future Findings engine can consume the same policy and extend it with per-metric rules.</div>
-        </section>
+        <div className="type-note">Finding thresholds are managed separately in the Findings module via a versioned Finding Policy JSON.</div>
 
         <div className="run-footer">
           <div><strong>{requiredConfigReady ? 'Configuration ready' : 'Complete the required fields'}</strong><span>{requiredConfigReady ? 'RiskLab can now run structural validation.' : 'Choose model output, target and default class to continue.'}</span></div>
@@ -1794,7 +1781,7 @@ function App() {
 
     const sortedProfiles = [...edaResult.profiles].sort((a, b) => {
       const direction = qualitySortDirection === 'asc' ? 1 : -1
-      const qualityRank = (profile: EdaProfile) => profile.missing_rate > validationConfig.findingPolicy.missingReview ? 2 : profile.missing_rate > validationConfig.findingPolicy.missingWatch ? 1 : 0
+      const qualityRank = (profile: EdaProfile) => profile.missing_rate > findingPolicy.missingReview ? 2 : profile.missing_rate > findingPolicy.missingWatch ? 1 : 0
       let comparison = 0
       if (qualitySort === 'column') comparison = a.column.localeCompare(b.column)
       if (qualitySort === 'semantic') comparison = a.semantic_type.localeCompare(b.semantic_type)
@@ -2067,7 +2054,7 @@ function App() {
                 <div className="eda-kpi-grid">
                   <article className="metric-card"><span>Rows</span><strong>{edaResult.overview.rows.toLocaleString()}</strong><small className="neutral">Full dataset</small></article>
                   <article className="metric-card"><span>Columns</span><strong>{edaResult.overview.columns}</strong><small className="neutral">Configured schema</small></article>
-                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > validationConfig.findingPolicy.missingWatch ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
+                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > findingPolicy.missingWatch ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
                   <article className="metric-card"><span>Duplicate rows</span><strong>{edaResult.overview.duplicate_rows.toLocaleString()}</strong><small className={edaResult.overview.duplicate_rows ? 'negative' : 'positive'}>{formatPercent(edaResult.overview.duplicate_rate)}</small></article>
                 </div>
                 <section className="panel eda-section">
@@ -2096,7 +2083,7 @@ function App() {
                       <tr key={profile.column}>
                         <td>{profile.column}</td><td>{profile.semantic_type}</td><td>{formatPercent(profile.missing_rate)}</td>
                         <td>{profile.unique_count_capped ? '>10,000' : (profile.unique_count ?? '—')}</td>
-                        <td><span className={profile.missing_rate > validationConfig.findingPolicy.missingReview ? 'eda-signal bad' : profile.missing_rate > validationConfig.findingPolicy.missingWatch ? 'eda-signal warn' : 'eda-signal good'}>{profile.missing_rate > validationConfig.findingPolicy.missingReview ? 'Review' : profile.missing_rate > validationConfig.findingPolicy.missingWatch ? 'Watch' : 'OK'}</span></td>
+                        <td><span className={profile.missing_rate > findingPolicy.missingReview ? 'eda-signal bad' : profile.missing_rate > findingPolicy.missingWatch ? 'eda-signal warn' : 'eda-signal good'}>{profile.missing_rate > findingPolicy.missingReview ? 'Review' : profile.missing_rate > findingPolicy.missingWatch ? 'Watch' : 'OK'}</span></td>
                       </tr>
                     ))}</tbody>
                   </table>
@@ -2277,7 +2264,7 @@ function App() {
                               <td>{variable.column}</td><td>{variable.semantic_type}</td>
                               {activeReference?.comparisons.map((comparison) => <td key={comparison.comparison}>{(variable.values[comparison.comparison] ?? 0).toFixed(4)}</td>)}
                               <td><strong>{variable.maxPsi.toFixed(4)}</strong></td>
-                              <td><span className={variable.maxPsi >= validationConfig.findingPolicy.psiHigh ? 'eda-signal bad' : variable.maxPsi >= validationConfig.findingPolicy.psiModerate ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= validationConfig.findingPolicy.psiHigh ? 'High' : variable.maxPsi >= validationConfig.findingPolicy.psiModerate ? 'Moderate' : 'Low'}</span></td>
+                              <td><span className={variable.maxPsi >= findingPolicy.psiHigh ? 'eda-signal bad' : variable.maxPsi >= findingPolicy.psiModerate ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= findingPolicy.psiHigh ? 'High' : variable.maxPsi >= findingPolicy.psiModerate ? 'Moderate' : 'Low'}</span></td>
                             </tr>
                           ))}</tbody>
                         </table>
@@ -2633,8 +2620,8 @@ function App() {
 
     const spiegelhalterBadge = (pValue: number | null) => {
       if (pValue === null) return <span className="calibration-test-badge neutral">Unavailable</span>
-      if (pValue < validationConfig.findingPolicy.spiegelhalterStrong) return <span className="calibration-test-badge bad">{pValue.toFixed(4)} · Strong evidence</span>
-      if (pValue < validationConfig.findingPolicy.spiegelhalterEvidence) return <span className="calibration-test-badge warn">{pValue.toFixed(4)} · Evidence</span>
+      if (pValue < findingPolicy.spiegelhalterStrong) return <span className="calibration-test-badge bad">{pValue.toFixed(4)} · Strong evidence</span>
+      if (pValue < findingPolicy.spiegelhalterEvidence) return <span className="calibration-test-badge warn">{pValue.toFixed(4)} · Evidence</span>
       return <span className="calibration-test-badge neutral">{pValue.toFixed(4)} · No significant evidence</span>
     }
 
@@ -2790,7 +2777,7 @@ function App() {
               ))}</tbody>
             </table>
           </div>
-          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ {(validationConfig.findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · no significant evidence</span><span><i className="warn" />{(validationConfig.findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% ≤ p &lt; {(validationConfig.findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · evidence</span><span><i className="bad" />p &lt; {(validationConfig.findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% · strong evidence</span></div>
+          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ {(findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · no significant evidence</span><span><i className="warn" />{(findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% ≤ p &lt; {(findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · evidence</span><span><i className="bad" />p &lt; {(findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% · strong evidence</span></div>
         </section>
 
         <div className="calibration-kpis">
@@ -2901,8 +2888,8 @@ function App() {
     const activeVariable = activeComparison?.variables.find((variable) => variable.column === stabilityVariable)
       ?? activeComparison?.variables[0]
 
-    const psiTone = (psi: number) => psi > validationConfig.findingPolicy.psiHigh ? 'bad' : psi >= validationConfig.findingPolicy.psiModerate ? 'warn' : 'neutral'
-    const psiStatus = (psi: number) => psi > validationConfig.findingPolicy.psiHigh ? 'High shift' : psi >= validationConfig.findingPolicy.psiModerate ? 'Moderate shift' : 'Low shift'
+    const psiTone = (psi: number) => psi > findingPolicy.psiHigh ? 'bad' : psi >= findingPolicy.psiModerate ? 'warn' : 'neutral'
+    const psiStatus = (psi: number) => psi > findingPolicy.psiHigh ? 'High shift' : psi >= findingPolicy.psiModerate ? 'Moderate shift' : 'Low shift'
 
     const distributionOption: echarts.EChartsOption | null = activeVariable ? {
       backgroundColor: 'transparent',
@@ -2950,8 +2937,8 @@ function App() {
           label: { color: '#91a0b7' },
           lineStyle: { type: 'dashed', width: 1 },
           data: [
-            { yAxis: validationConfig.findingPolicy.psiModerate, label: { formatter: `${validationConfig.findingPolicy.psiModerate.toFixed(2)} · moderate` }, lineStyle: { color: '#d99a3e' } },
-            { yAxis: validationConfig.findingPolicy.psiHigh, label: { formatter: `${validationConfig.findingPolicy.psiHigh.toFixed(2)} · high` }, lineStyle: { color: '#e56f6f' } },
+            { yAxis: findingPolicy.psiModerate, label: { formatter: `${findingPolicy.psiModerate.toFixed(2)} · moderate` }, lineStyle: { color: '#d99a3e' } },
+            { yAxis: findingPolicy.psiHigh, label: { formatter: `${findingPolicy.psiHigh.toFixed(2)} · high` }, lineStyle: { color: '#e56f6f' } },
             ...(cutoffMarkLine ? cutoffMarkLine.data : []),
           ],
         },
@@ -3017,7 +3004,7 @@ function App() {
         {activeComparison && (
           <>
             <section className="panel stability-summary-section">
-              <div className="panel-title"><div><h2 className="heading-with-help">PSI summary {metricHelp('psi', 'Population Stability Index')}</h2><p className="eda-muted">Current finding policy: PSI &lt; {validationConfig.findingPolicy.psiModerate.toFixed(2)} low, {validationConfig.findingPolicy.psiModerate.toFixed(2)}–{validationConfig.findingPolicy.psiHigh.toFixed(2)} moderate, &gt; {validationConfig.findingPolicy.psiHigh.toFixed(2)} high.</p></div></div>
+              <div className="panel-title"><div><h2 className="heading-with-help">PSI summary {metricHelp('psi', 'Population Stability Index')}</h2><p className="eda-muted">Current finding policy: PSI &lt; {findingPolicy.psiModerate.toFixed(2)} low, {findingPolicy.psiModerate.toFixed(2)}–{findingPolicy.psiHigh.toFixed(2)} moderate, &gt; {findingPolicy.psiHigh.toFixed(2)} high.</p></div></div>
               <div className="table-wrap">
                 <table className="stability-summary-table">
                   <thead><tr><th>Variable</th><th><span className="metric-label-with-help">PSI {metricHelp('psi', 'Population Stability Index')}</span></th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
@@ -3033,7 +3020,7 @@ function App() {
                   ))}</tbody>
                 </table>
               </div>
-              <div className="eda-sample-note">Finding thresholds are configurable in Validation. Current PSI policy: moderate from {validationConfig.findingPolicy.psiModerate.toFixed(2)}, high above {validationConfig.findingPolicy.psiHigh.toFixed(2)}. Click a variable row to inspect its distribution.</div>
+              <div className="eda-sample-note">Finding thresholds are configurable in Validation. Current PSI policy: moderate from {findingPolicy.psiModerate.toFixed(2)}, high above {findingPolicy.psiHigh.toFixed(2)}. Click a variable row to inspect its distribution.</div>
             </section>
 
             {activeVariable && distributionOption && (
