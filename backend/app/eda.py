@@ -105,6 +105,102 @@ def _empirical_cdf(values: list[float], points: int = 100) -> list[dict[str, flo
     return result
 
 
+def _auc_from_scores(rows: list[tuple[float, int]]) -> float | None:
+    positives = sum(target for _, target in rows)
+    negatives = len(rows) - positives
+    if len(rows) < 2 or positives == 0 or negatives == 0:
+        return None
+
+    ordered = sorted(rows, key=lambda item: item[0])
+    rank = 1
+    positive_rank_sum = 0.0
+    index = 0
+    while index < len(ordered):
+        end = index + 1
+        while end < len(ordered) and ordered[end][0] == ordered[index][0]:
+            end += 1
+        average_rank = (rank + (rank + end - index - 1)) / 2
+        positive_rank_sum += average_rank * sum(target for _, target in ordered[index:end])
+        rank += end - index
+        index = end
+
+    return (positive_rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
+
+
+def _univariate_target_diagnostics(
+    rows: list[dict[str, str]],
+    column: str,
+    semantic: str,
+    target_column: str,
+    positive_class: str,
+) -> dict[str, Any]:
+    if not target_column or not positive_class or column == target_column:
+        return {"auc": None, "auc_direction": None, "category_logits": []}
+
+    labelled = [
+        row for row in rows
+        if not _is_missing(row.get(target_column))
+    ]
+    if not labelled:
+        return {"auc": None, "auc_direction": None, "category_logits": []}
+
+    if semantic in {"continuous", "ordinal"}:
+        scored: list[tuple[float, int]] = []
+        for row in labelled:
+            value = _to_float(row.get(column))
+            if value is None:
+                continue
+            target = 1 if str(row.get(target_column, "")).strip() == positive_class else 0
+            scored.append((value, target))
+        raw_auc = _auc_from_scores(scored)
+        if raw_auc is None:
+            return {"auc": None, "auc_direction": None, "category_logits": []}
+        if raw_auc >= 0.5:
+            return {"auc": raw_auc, "auc_direction": "higher-is-riskier", "category_logits": []}
+        return {"auc": 1.0 - raw_auc, "auc_direction": "lower-is-riskier", "category_logits": []}
+
+    if semantic in {"categorical", "boolean"}:
+        grouped: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        for row in labelled:
+            if _is_missing(row.get(column)):
+                continue
+            value = str(row.get(column, "")).strip()
+            grouped[value][0] += 1
+            if str(row.get(target_column, "")).strip() == positive_class:
+                grouped[value][1] += 1
+
+        logits: dict[str, float] = {}
+        details: list[dict[str, Any]] = []
+        for value, (count, defaults) in grouped.items():
+            smoothed_rate = (defaults + 0.5) / (count + 1.0)
+            logit = math.log(smoothed_rate / (1.0 - smoothed_rate))
+            logits[value] = logit
+            details.append({
+                "value": value,
+                "count": count,
+                "defaults": defaults,
+                "default_rate": defaults / count if count else 0.0,
+                "logit": logit,
+            })
+
+        scored = []
+        for row in labelled:
+            if _is_missing(row.get(column)):
+                continue
+            value = str(row.get(column, "")).strip()
+            target = 1 if str(row.get(target_column, "")).strip() == positive_class else 0
+            scored.append((logits[value], target))
+
+        details.sort(key=lambda item: item["count"], reverse=True)
+        return {
+            "auc": _auc_from_scores(scored),
+            "auc_direction": "category-logit",
+            "category_logits": details[:TOP_CATEGORIES],
+        }
+
+    return {"auc": None, "auc_direction": None, "category_logits": []}
+
+
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
     if len(xs) < 3 or len(xs) != len(ys):
         return None
@@ -359,6 +455,8 @@ async def run_eda(dataset_id: str = Form(...), config: str = Form(...), time_gra
     semantic_types: dict[str, str] = cfg.get("semanticTypes", {})
     population_columns: list[str] = cfg.get("populationColumns", [])
     time_column: str = cfg.get("timeColumn", "")
+    target_column: str = cfg.get("targetColumn", "")
+    positive_class: str = str(cfg.get("positiveClass", ""))
 
     dataset = get_dataset(dataset_id)
     columns = list(dataset["columns"])
@@ -480,6 +578,17 @@ async def run_eda(dataset_id: str = Form(...), config: str = Form(...), time_gra
                     "median_length": statistics.median(lengths),
                     "max_length": max(lengths),
                 }
+
+        target_diagnostics = _univariate_target_diagnostics(
+            sample_rows,
+            column,
+            semantic,
+            target_column,
+            positive_class,
+        )
+        profile["univariate_auc"] = target_diagnostics["auc"]
+        profile["auc_direction"] = target_diagnostics["auc_direction"]
+        profile["category_logits"] = target_diagnostics["category_logits"]
 
         profiles.append(profile)
 
