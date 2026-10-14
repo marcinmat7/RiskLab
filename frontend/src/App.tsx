@@ -2038,6 +2038,73 @@ function App() {
     )
   }
 
+  const renderReports = () => {
+    if (!preview) return <EmptyAnalysisState section="Reports" onOpenData={() => setActiveSection('Data')} />
+
+    return (
+      <section className="page-content reports-page">
+        <div className="analysis-page-header">
+          <div>
+            <p className="eyebrow">Reports</p>
+            <h1>Validation report</h1>
+            <p>Generate a portable, self-contained HTML snapshot with metrics, embedded charts, findings, configuration and Finding Policy metadata.</p>
+          </div>
+          <div className="eda-header-actions">
+            <div className={`analysis-status-pill ${reportHtml ? 'ready' : validationReady ? 'not-run' : 'blocked'}`}><span />{reportHtml ? 'Report ready' : validationReady ? 'Not generated' : 'Blocked'}</div>
+            {reportHtml && <button className="primary-button" onClick={downloadReport}>Download HTML</button>}
+          </div>
+        </div>
+
+        {!validationReady ? (
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>⌁</span></div>
+            <h2>Complete validation first</h2>
+            <p>RiskLab needs a validated dataset mapping before it can run the analysis package and generate a report.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open Validation</button>
+          </section>
+        ) : !reportHtml ? (
+          <section className="panel report-generate-card">
+            <div>
+              <p className="eyebrow">Self-contained HTML</p>
+              <h2>Generate the complete validation package</h2>
+              <p>The full run executes EDA, discrimination, calibration where available, stability, evaluates Findings and then builds one standalone HTML file. The file has no external assets and can be opened offline.</p>
+            </div>
+            <button className="primary-button" disabled={fullRunStatus === 'running'} onClick={runFullValidationAndReport}>{fullRunStatus === 'running' ? 'Generating…' : 'Run full validation & generate report'}</button>
+          </section>
+        ) : (
+          <>
+            <section className="panel report-ready-card">
+              <div>
+                <p className="eyebrow">Report ready</p>
+                <h2>{preview.filename}</h2>
+                <p>Generated {reportGeneratedAt}. The report contains inline CSS and SVG charts and does not depend on RiskLab, a server connection or external JavaScript after export.</p>
+              </div>
+              <div className="report-ready-actions">
+                <button className="primary-button" onClick={downloadReport}>Download self-contained HTML</button>
+                <button className="secondary-button" disabled={fullRunStatus === 'running'} onClick={runFullValidationAndReport}>Regenerate</button>
+              </div>
+            </section>
+
+            <section className="panel report-content-summary">
+              <div className="panel-title"><div><h2>Included in report</h2><p className="eda-muted">The export is a reproducible snapshot of the currently completed validation package.</p></div></div>
+              <div className="report-content-grid">
+                <div><strong>Executive metrics</strong><span>AUC, Gini, KS, Brier, O/E, PD and default rate</span></div>
+                <div><strong>Embedded charts</strong><span>ROC, calibration and top PSI values as inline SVG/CSS</span></div>
+                <div><strong>Findings</strong><span>Description, evidence, severity and policy criteria</span></div>
+                <div><strong>Configuration</strong><span>Dataset metadata, model mapping, time cut-off and segment roles</span></div>
+                <div><strong>Finding Policy</strong><span>Policy ID, version, schema and global sample requirements</span></div>
+                <div><strong>Offline portability</strong><span>One HTML file with no external assets</span></div>
+              </div>
+            </section>
+          </>
+        )}
+
+        {fullRunError && <div className="message error-message">{fullRunError}</div>}
+        {fullRunStatus === 'running' && <div className="overview-run-message running"><span className="analysis-status-pill running"><span />Running</span><strong>{fullRunStep}</strong></div>}
+      </section>
+    )
+  }
+
   const renderMethodology = () => {
     const query = methodologySearch.trim().toLowerCase()
     const filtered = methodologyEntries.filter((entry) => {
@@ -3821,8 +3888,9 @@ function App() {
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
         {activeSection === 'Findings' && renderFindings()}
+        {activeSection === 'Reports' && renderReports()}
         {activeSection === 'Methodology' && renderMethodology()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Reports' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
