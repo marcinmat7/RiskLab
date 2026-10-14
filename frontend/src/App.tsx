@@ -1021,6 +1021,11 @@ function App() {
     setValidationParsingWarnings([])
     setValidationRunError(null)
     setFindingPolicyMessage(null)
+    setFullRunStatus('idle')
+    setFullRunStep('')
+    setFullRunError(null)
+    setReportHtml('')
+    setReportGeneratedAt('')
   }
 
   const invalidateAnalysisResults = () => {
@@ -1052,6 +1057,11 @@ function App() {
     setValidationParsingWarnings([])
     setValidationRunError(null)
     setFindingPolicyMessage(null)
+    setFullRunStatus('idle')
+    setFullRunStep('')
+    setFullRunError(null)
+    setReportHtml('')
+    setReportGeneratedAt('')
   }
 
   const exportValidationConfig = () => {
@@ -1109,6 +1119,9 @@ function App() {
       }
       setFindingPolicy(parsed)
       setFindingPolicyMessage(`Loaded ${parsed.name} v${parsed.version}.`)
+      setReportHtml('')
+      setReportGeneratedAt('')
+      setAnalysisStatus((current) => ({ ...current, Findings: 'not-run', Reports: 'not-run' }))
     } catch (err) {
       setFindingPolicyMessage(err instanceof Error ? err.message : 'Could not import finding policy.')
     }
@@ -1117,6 +1130,9 @@ function App() {
   const resetFindingPolicy = () => {
     setFindingPolicy(defaultFindingPolicy)
     setFindingPolicyMessage(`Restored ${defaultFindingPolicy.name} v${defaultFindingPolicy.version}.`)
+    setReportHtml('')
+    setReportGeneratedAt('')
+    setAnalysisStatus((current) => ({ ...current, Findings: 'not-run', Reports: 'not-run' }))
   }
 
   const importValidationConfig = async (event: ChangeEvent<HTMLInputElement>) => {
