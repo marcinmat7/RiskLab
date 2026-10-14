@@ -25,7 +25,7 @@ type DatasetPreview = {
 }
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
-type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Segments' | 'Findings' | 'Reports' | 'Methodology'
+type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Findings' | 'Reports' | 'Methodology'
 type AnalysisSection = Exclude<Section, 'Overview' | 'Data' | 'Methodology'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
@@ -48,6 +48,14 @@ type ValidationConfig = {
   sensitiveColumns: string[]
   featureColumns: string[]
   semanticTypes: Record<string, SemanticType>
+  findingPolicy: {
+    missingWatch: number
+    missingReview: number
+    psiModerate: number
+    psiHigh: number
+    spiegelhalterEvidence: number
+    spiegelhalterStrong: number
+  }
 }
 
 type ValidationConfigFile = {
@@ -371,8 +379,8 @@ type StabilityResult = {
   }
 }
 
-const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports', 'Methodology']
-const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Findings', 'Reports']
+const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports', 'Methodology']
+const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports']
 
 type MethodologyEntry = {
   id: string
@@ -595,7 +603,6 @@ const analysisCopy: Record<AnalysisSection, { title: string; description: string
   Discrimination: { title: 'Discrimination', description: 'Evaluate ranking performance of the submitted model.', action: 'Run discrimination' },
   Calibration: { title: 'Calibration', description: 'Evaluate how predicted probabilities align with observed default rates.', action: 'Run calibration' },
   Stability: { title: 'Stability', description: 'Assess population and model stability over time or across samples.', action: 'Run stability analysis' },
-  Segments: { title: 'Segments', description: 'Compare model behaviour across selected populations and business segments.', action: 'Run segment analysis' },
   Findings: { title: 'Findings', description: 'Generate structured findings from completed validation analyses.', action: 'Generate findings' },
   Reports: { title: 'Reports', description: 'Generate a validation report from the analyses currently available.', action: 'Generate report' },
 }
@@ -615,6 +622,14 @@ const initialConfig: ValidationConfig = {
   sensitiveColumns: [],
   featureColumns: [],
   semanticTypes: {},
+  findingPolicy: {
+    missingWatch: 0.05,
+    missingReview: 0.20,
+    psiModerate: 0.10,
+    psiHigh: 0.25,
+    spiegelhalterEvidence: 0.05,
+    spiegelhalterStrong: 0.01,
+  },
 }
 
 const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
@@ -623,7 +638,6 @@ const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
   Discrimination: 'blocked',
   Calibration: 'blocked',
   Stability: 'blocked',
-  Segments: 'blocked',
   Findings: 'blocked',
   Reports: 'blocked',
 })
@@ -1077,6 +1091,14 @@ function App() {
         sensitiveColumns: existingColumns(raw.sensitiveColumns, 'Sensitive attribute'),
         featureColumns: existingColumns(raw.featureColumns, 'Model feature'),
         semanticTypes,
+        findingPolicy: {
+          missingWatch: typeof raw.findingPolicy?.missingWatch === 'number' ? raw.findingPolicy.missingWatch : initialConfig.findingPolicy.missingWatch,
+          missingReview: typeof raw.findingPolicy?.missingReview === 'number' ? raw.findingPolicy.missingReview : initialConfig.findingPolicy.missingReview,
+          psiModerate: typeof raw.findingPolicy?.psiModerate === 'number' ? raw.findingPolicy.psiModerate : initialConfig.findingPolicy.psiModerate,
+          psiHigh: typeof raw.findingPolicy?.psiHigh === 'number' ? raw.findingPolicy.psiHigh : initialConfig.findingPolicy.psiHigh,
+          spiegelhalterEvidence: typeof raw.findingPolicy?.spiegelhalterEvidence === 'number' ? raw.findingPolicy.spiegelhalterEvidence : initialConfig.findingPolicy.spiegelhalterEvidence,
+          spiegelhalterStrong: typeof raw.findingPolicy?.spiegelhalterStrong === 'number' ? raw.findingPolicy.spiegelhalterStrong : initialConfig.findingPolicy.spiegelhalterStrong,
+        },
       }
 
       if (predictionColumn && targetColumn && predictionColumn === targetColumn) {
@@ -1563,9 +1585,9 @@ function App() {
         <section className="panel setup-card">
           <div className="setup-section-heading"><div><span className="setup-number">1</span><div><h2>Required setup</h2><p>These fields are required before validation can run.</p></div></div></div>
           <div className="form-grid">
-            <label className="form-field"><span>Model output column <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Stability', 'Segments', 'Fairness']} /><select value={validationConfig.predictionColumn} onChange={(e) => setValidationConfig({...validationConfig, predictionColumn:e.target.value})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+            <label className="form-field"><span>Model output column <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Stability', 'Fairness']} /><select value={validationConfig.predictionColumn} onChange={(e) => setValidationConfig({...validationConfig, predictionColumn:e.target.value})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
             <label className="form-field"><span>Output type <b>*</b></span><UsedBy modules={['Discrimination', 'Calibration']} /><select value={validationConfig.predictionType} onChange={(e) => setValidationConfig({...validationConfig, predictionType:e.target.value as PredictionType})}><option value="pd">Probability of Default (PD)</option><option value="score">Score</option></select></label>
-            <label className="form-field"><span>Default indicator <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Segments', 'Fairness']} /><select value={validationConfig.targetColumn} onChange={(e) => setValidationConfig({...validationConfig, targetColumn:e.target.value, positiveClass:''})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+            <label className="form-field"><span>Default indicator <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Fairness']} /><select value={validationConfig.targetColumn} onChange={(e) => setValidationConfig({...validationConfig, targetColumn:e.target.value, positiveClass:''})}><option value="">Select column…</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
             <label className="form-field"><span>Default class <b>*</b></span><UsedBy modules={['Validation', 'Discrimination', 'Calibration', 'Fairness']} /><select value={validationConfig.positiveClass} onChange={(e) => setValidationConfig({...validationConfig, positiveClass:e.target.value})} disabled={!validationConfig.targetColumn}><option value="">Select value…</option>{targetValues.map((value) => <option key={value} value={value}>{value}</option>)}</select><small>Values are detected from the current preview sample.</small></label>
           </div>
 
@@ -1583,7 +1605,7 @@ function App() {
         <section className="panel setup-card column-types-card">
           <div className="setup-section-heading">
             <div><span className="setup-number">2</span><div><h2>Column types</h2><p>RiskLab detects the physical type from the uploaded dataset. Review or change the semantic type used by downstream analyses.</p></div></div>
-            <UsedBy modules={['EDA', 'Segments', 'Stability', 'Challenger models']} />
+            <UsedBy modules={['EDA', 'Stability', 'Challenger models']} />
           </div>
           <div className="column-type-table">
             <div className="column-type-row column-type-head"><span>Column</span><span>Detected physical type</span><span>Semantic type</span></div>
@@ -1628,7 +1650,7 @@ function App() {
           <div className="setup-section-heading"><div><span className="setup-number optional">3</span><div><h2>Optional analysis settings</h2><p>These roles unlock time, representativeness, fairness and challenger-model analyses later.</p></div></div><span className="optional-badge">Optional</span></div>
 
           <div className="optional-setting time-analysis-setting">
-            <div className="setting-copy"><h3>Time analysis</h3><p>Select a date or time column for analyses over time. An optional cut-off can be shown consistently across time charts and exposed as a reusable analysis segment.</p><UsedBy modules={['EDA', 'Discrimination', 'Calibration', 'Stability', 'Segments']} /></div>
+            <div className="setting-copy"><h3>Time analysis</h3><p>Select a date or time column for analyses over time. An optional cut-off can be shown consistently across time charts and exposed as a reusable analysis segment.</p><UsedBy modules={['EDA', 'Discrimination', 'Calibration', 'Stability']} /></div>
             <div className="time-config-stack">
               <label className="form-field compact-field"><span>Time column</span><select value={validationConfig.timeColumn} onChange={(e) => setValidationConfig({...validationConfig, timeColumn:e.target.value, ...(e.target.value ? {} : { timeCutoffDate:'', timeCutoffAsSegment:false })})}><option value="">Not configured</option>{preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
               {validationConfig.timeColumn && (
@@ -1647,7 +1669,7 @@ function App() {
           </div>
 
           <div className="optional-setting stacked">
-            <div className="setting-copy"><h3>Sample / population columns</h3><p>Use columns such as train/test, development/validation, country or portfolio to compare sample representativeness.</p><UsedBy modules={['EDA', 'Stability', 'Segments']} /></div>
+            <div className="setting-copy"><h3>Sample / population columns</h3><p>Use columns such as train/test, development/validation, country or portfolio to compare sample representativeness.</p><UsedBy modules={['EDA', 'Stability']} /></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.populationColumns} onChange={(value) => setValidationConfig({...validationConfig, populationColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
 
@@ -1661,6 +1683,19 @@ function App() {
             <div className="picker-toolbar"><button className="text-button" onClick={() => setValidationConfig({...validationConfig, featureColumns:preview.columns.filter((c) => ![validationConfig.predictionColumn, validationConfig.targetColumn].includes(c))})}>Select all available</button><button className="text-button" onClick={() => setValidationConfig({...validationConfig, featureColumns:[]})}>Clear</button></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.featureColumns} onChange={(value) => setValidationConfig({...validationConfig, featureColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
+        </section>
+
+        <section className="panel setup-card finding-policy-card">
+          <div className="setup-section-heading"><div><span className="setup-number optional">4</span><div><h2>Finding policy</h2><p>Customize the heuristic thresholds RiskLab uses for warnings and future Findings. Values are saved in Validation config.</p></div></div><span className="optional-badge">Optional</span></div>
+          <div className="finding-policy-grid">
+            <label className="form-field"><span>Missing · Watch above</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.missingWatch} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, missingWatch:Number(e.target.value)}})} /><small>0.05 = 5%</small></label>
+            <label className="form-field"><span>Missing · Review above</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.missingReview} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, missingReview:Number(e.target.value)}})} /><small>0.20 = 20%</small></label>
+            <label className="form-field"><span>PSI · Moderate from</span><input type="number" min="0" step="0.01" value={validationConfig.findingPolicy.psiModerate} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, psiModerate:Number(e.target.value)}})} /></label>
+            <label className="form-field"><span>PSI · High above</span><input type="number" min="0" step="0.01" value={validationConfig.findingPolicy.psiHigh} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, psiHigh:Number(e.target.value)}})} /></label>
+            <label className="form-field"><span>Spiegelhalter · Evidence below p</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.spiegelhalterEvidence} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, spiegelhalterEvidence:Number(e.target.value)}})} /></label>
+            <label className="form-field"><span>Spiegelhalter · Strong below p</span><input type="number" min="0" max="1" step="0.01" value={validationConfig.findingPolicy.spiegelhalterStrong} onChange={(e) => setValidationConfig({...validationConfig, findingPolicy:{...validationConfig.findingPolicy, spiegelhalterStrong:Number(e.target.value)}})} /></label>
+          </div>
+          <div className="type-note">These are policy defaults, not universal regulatory thresholds. The future Findings engine can consume the same policy and extend it with per-metric rules.</div>
         </section>
 
         <div className="run-footer">
@@ -1720,7 +1755,7 @@ function App() {
 
     const sortedProfiles = [...edaResult.profiles].sort((a, b) => {
       const direction = qualitySortDirection === 'asc' ? 1 : -1
-      const qualityRank = (profile: EdaProfile) => profile.missing_rate > .2 ? 2 : profile.missing_rate > .05 ? 1 : 0
+      const qualityRank = (profile: EdaProfile) => profile.missing_rate > validationConfig.findingPolicy.missingReview ? 2 : profile.missing_rate > validationConfig.findingPolicy.missingWatch ? 1 : 0
       let comparison = 0
       if (qualitySort === 'column') comparison = a.column.localeCompare(b.column)
       if (qualitySort === 'semantic') comparison = a.semantic_type.localeCompare(b.semantic_type)
@@ -1931,39 +1966,24 @@ function App() {
       lineStyle: { type: 'dashed' as const, width: 1, color: '#9aa9bd' },
       data: [{ xAxis: edaCutoffBucket }],
     } : undefined
-    const timeMissingOption = (column: string): echarts.EChartsOption => ({
-      backgroundColor: 'transparent',
-      tooltip: { trigger: 'axis' },
-      toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
-      grid: { left: 58, right: 18, top: 28, bottom: 66 },
-      xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
-      yAxis: { type: 'value', min: 0, max: 1, name: 'Missing', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
-      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
-      series: [{
-        name: 'Missing %',
-        type: 'line',
-        showSymbol: false,
-        data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.missing_rate ?? null),
-        lineStyle: { width: 2, color: '#8b99ad' },
-        areaStyle: { opacity: .08, color: '#8b99ad' },
-        markLine: edaCutoffMarkLine,
-      }],
-    })
-
     const timeStatsOption = (column: string): echarts.EChartsOption => ({
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
       toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
       legend: { top: 0, textStyle: { color: '#8b9aaf' } },
-      grid: { left: 62, right: 18, top: 42, bottom: 66 },
+      grid: { left: 62, right: 72, top: 42, bottom: 66 },
       xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
-      yAxis: { type: 'value', name: column, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+      yAxis: [
+        { type: 'value', name: column, axisLabel: { color: '#71809a' }, splitLine: { lineStyle: { color: '#1b293d' } } },
+        { type: 'value', min: 0, max: 1, name: 'Missing', position: 'right', axisLabel: { color: '#a78bfa', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { show: false } },
+      ],
       dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
       series: [
-        { name: 'Min', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.min ?? null), lineStyle: { width: 1, type: 'dashed', color: '#65758d' } },
-        { name: 'Max', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.max ?? null), lineStyle: { width: 1, type: 'dashed', color: '#91a0b7' } },
-        { name: 'Mean', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.mean ?? null), lineStyle: { width: 2, color: '#4f8cff' }, markLine: edaCutoffMarkLine },
-        { name: 'Median', type: 'line', showSymbol: false, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.median ?? null), lineStyle: { width: 2, color: '#69e7ad' } },
+        { name: 'Min', type: 'line', showSymbol: false, yAxisIndex: 0, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.min ?? null), lineStyle: { width: 1, type: 'dashed', color: '#65758d' } },
+        { name: 'Max', type: 'line', showSymbol: false, yAxisIndex: 0, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.max ?? null), lineStyle: { width: 1, type: 'dashed', color: '#91a0b7' } },
+        { name: 'Mean', type: 'line', showSymbol: false, yAxisIndex: 0, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.mean ?? null), lineStyle: { width: 2, color: '#4f8cff' }, markLine: edaCutoffMarkLine },
+        { name: 'Median', type: 'line', showSymbol: false, yAxisIndex: 0, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.median ?? null), lineStyle: { width: 2, color: '#69e7ad' } },
+        { name: 'Missing %', type: 'line', showSymbol: false, yAxisIndex: 1, data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.missing_rate ?? null), lineStyle: { width: 2, color: '#a78bfa' } },
       ],
     })
 
@@ -2008,7 +2028,7 @@ function App() {
                 <div className="eda-kpi-grid">
                   <article className="metric-card"><span>Rows</span><strong>{edaResult.overview.rows.toLocaleString()}</strong><small className="neutral">Full dataset</small></article>
                   <article className="metric-card"><span>Columns</span><strong>{edaResult.overview.columns}</strong><small className="neutral">Configured schema</small></article>
-                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > .05 ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
+                  <article className="metric-card"><span>Missing cells</span><strong>{formatPercent(edaResult.overview.missing_rate)}</strong><small className={edaResult.overview.missing_rate > validationConfig.findingPolicy.missingWatch ? 'negative' : 'neutral'}>{edaResult.overview.missing_cells.toLocaleString()} cells</small></article>
                   <article className="metric-card"><span>Duplicate rows</span><strong>{edaResult.overview.duplicate_rows.toLocaleString()}</strong><small className={edaResult.overview.duplicate_rows ? 'negative' : 'positive'}>{formatPercent(edaResult.overview.duplicate_rate)}</small></article>
                 </div>
                 <section className="panel eda-section">
@@ -2037,7 +2057,7 @@ function App() {
                       <tr key={profile.column}>
                         <td>{profile.column}</td><td>{profile.semantic_type}</td><td>{formatPercent(profile.missing_rate)}</td>
                         <td>{profile.unique_count_capped ? '>10,000' : (profile.unique_count ?? '—')}</td>
-                        <td><span className={profile.missing_rate > .2 ? 'eda-signal bad' : profile.missing_rate > .05 ? 'eda-signal warn' : 'eda-signal good'}>{profile.missing_rate > .2 ? 'Review' : profile.missing_rate > .05 ? 'Watch' : 'OK'}</span></td>
+                        <td><span className={profile.missing_rate > validationConfig.findingPolicy.missingReview ? 'eda-signal bad' : profile.missing_rate > validationConfig.findingPolicy.missingWatch ? 'eda-signal warn' : 'eda-signal good'}>{profile.missing_rate > validationConfig.findingPolicy.missingReview ? 'Review' : profile.missing_rate > validationConfig.findingPolicy.missingWatch ? 'Watch' : 'OK'}</span></td>
                       </tr>
                     ))}</tbody>
                   </table>
@@ -2218,7 +2238,7 @@ function App() {
                               <td>{variable.column}</td><td>{variable.semantic_type}</td>
                               {activeReference?.comparisons.map((comparison) => <td key={comparison.comparison}>{(variable.values[comparison.comparison] ?? 0).toFixed(4)}</td>)}
                               <td><strong>{variable.maxPsi.toFixed(4)}</strong></td>
-                              <td><span className={variable.maxPsi >= .25 ? 'eda-signal bad' : variable.maxPsi >= .1 ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= .25 ? 'High' : variable.maxPsi >= .1 ? 'Moderate' : 'Low'}</span></td>
+                              <td><span className={variable.maxPsi >= validationConfig.findingPolicy.psiHigh ? 'eda-signal bad' : variable.maxPsi >= validationConfig.findingPolicy.psiModerate ? 'eda-signal warn' : 'eda-signal good'}>{variable.maxPsi >= validationConfig.findingPolicy.psiHigh ? 'High' : variable.maxPsi >= validationConfig.findingPolicy.psiModerate ? 'Moderate' : 'Low'}</span></td>
                             </tr>
                           ))}</tbody>
                         </table>
@@ -2265,13 +2285,12 @@ function App() {
                       onDrop={(event) => { event.preventDefault(); const column = event.dataTransfer.getData('text/plain'); if (column) addTimeVariable(column) }}
                     >
                       {timeWorkspace.length === 0 ? (
-                        <div className="time-empty-drop"><strong>Drop numeric variables here</strong><span>Each variable creates a missingness chart and a min / max / mean / median chart.</span></div>
+                        <div className="time-empty-drop"><strong>Drop numeric variables here</strong><span>Each variable creates one chart with min / max / mean / median and missing rate on a secondary right-hand axis.</span></div>
                       ) : timeWorkspace.map((column) => (
                         <article className="time-variable-panel" key={column}>
                           <div className="time-variable-panel-head"><div><h3>{column}</h3><span>{timeGranularity} aggregation</span></div><button onClick={() => setTimeWorkspace((current) => current.filter((item) => item !== column))}>Remove</button></div>
-                          <div className="time-chart-pair">
-                            <div className="eda-chart-panel"><h4>Missing values</h4><EChart option={timeMissingOption(column)} height={330} group="risklab-time-workspace" /></div>
-                            <div className="eda-chart-panel"><h4>Min / max / mean / median</h4><EChart option={timeStatsOption(column)} height={330} group="risklab-time-workspace" /></div>
+                          <div className="time-chart-single">
+                            <div className="eda-chart-panel"><h4>Min / max / mean / median · missing rate on right axis</h4><EChart option={timeStatsOption(column)} height={360} group="risklab-time-workspace" /></div>
                           </div>
                         </article>
                       ))}
@@ -2575,8 +2594,8 @@ function App() {
 
     const spiegelhalterBadge = (pValue: number | null) => {
       if (pValue === null) return <span className="calibration-test-badge neutral">Unavailable</span>
-      if (pValue < 0.01) return <span className="calibration-test-badge bad">{pValue.toFixed(4)} · Strong evidence</span>
-      if (pValue < 0.05) return <span className="calibration-test-badge warn">{pValue.toFixed(4)} · Evidence</span>
+      if (pValue < validationConfig.findingPolicy.spiegelhalterStrong) return <span className="calibration-test-badge bad">{pValue.toFixed(4)} · Strong evidence</span>
+      if (pValue < validationConfig.findingPolicy.spiegelhalterEvidence) return <span className="calibration-test-badge warn">{pValue.toFixed(4)} · Evidence</span>
       return <span className="calibration-test-badge neutral">{pValue.toFixed(4)} · No significant evidence</span>
     }
 
@@ -2663,8 +2682,11 @@ function App() {
               name: 'Observed default rate',
               type: 'line',
               showSymbol: true,
-              data: timeData.overall.map((bucket) => bucket.default_rate),
-              lineStyle: { width: 2, color: '#69e7ad' },
+              data: timeData.overall.map((bucket) => ({
+                value: bucket.default_rate,
+                itemStyle: { color: bucket.default_rate > bucket.mean_pd ? '#ff6b6b' : bucket.default_rate < bucket.mean_pd ? '#69e7ad' : '#9aa9bd' },
+              })),
+              lineStyle: { width: 2, color: '#9aa9bd' },
             },
           ]
         : (selectedTimeSegment?.groups.flatMap((group, groupIndex) => {
@@ -2682,8 +2704,15 @@ function App() {
                 name: `${group.value} · Observed`,
                 type: 'line' as const,
                 showSymbol: true,
-                data: timeCategories.map((bucket) => lookup.get(bucket)?.default_rate ?? null),
-                lineStyle: { width: 2 },
+                data: timeCategories.map((bucket) => {
+                  const point = lookup.get(bucket)
+                  if (!point) return null
+                  return {
+                    value: point.default_rate,
+                    itemStyle: { color: point.default_rate > point.mean_pd ? '#ff6b6b' : point.default_rate < point.mean_pd ? '#69e7ad' : '#9aa9bd' },
+                  }
+                }),
+                lineStyle: { width: 2, color: '#9aa9bd' },
               },
             ]
           }) ?? []),
@@ -2715,14 +2744,14 @@ function App() {
                   <td><strong>{row.value}</strong></td>
                   <td>{row.observations.toLocaleString()}</td>
                   <td>{row.defaults.toLocaleString()}</td>
-                  <td>{formatPercent(row.default_rate)}</td>
+                  <td><span className={row.default_rate > row.mean_pd ? 'calibration-rate above' : row.default_rate < row.mean_pd ? 'calibration-rate below' : 'calibration-rate equal'}>{formatPercent(row.default_rate)}</span></td>
                   <td>{formatPercent(row.mean_pd)}</td>
                   <td>{spiegelhalterBadge(row.spiegelhalter_p_value)}</td>
                 </tr>
               ))}</tbody>
             </table>
           </div>
-          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ 5% · no significant evidence of miscalibration</span><span><i className="warn" />1% ≤ p &lt; 5% · evidence of miscalibration</span><span><i className="bad" />p &lt; 1% · strong evidence of miscalibration</span></div>
+          <div className="calibration-test-legend"><span><i className="neutral" />p ≥ {(validationConfig.findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · no significant evidence</span><span><i className="warn" />{(validationConfig.findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% ≤ p &lt; {(validationConfig.findingPolicy.spiegelhalterEvidence * 100).toFixed(1)}% · evidence</span><span><i className="bad" />p &lt; {(validationConfig.findingPolicy.spiegelhalterStrong * 100).toFixed(1)}% · strong evidence</span></div>
         </section>
 
         <div className="calibration-kpis">
@@ -2833,8 +2862,8 @@ function App() {
     const activeVariable = activeComparison?.variables.find((variable) => variable.column === stabilityVariable)
       ?? activeComparison?.variables[0]
 
-    const psiTone = (psi: number) => psi > result.thresholds.high ? 'bad' : psi >= result.thresholds.moderate ? 'warn' : 'neutral'
-    const psiStatus = (psi: number) => psi > result.thresholds.high ? 'High shift' : psi >= result.thresholds.moderate ? 'Moderate shift' : 'Low shift'
+    const psiTone = (psi: number) => psi > validationConfig.findingPolicy.psiHigh ? 'bad' : psi >= validationConfig.findingPolicy.psiModerate ? 'warn' : 'neutral'
+    const psiStatus = (psi: number) => psi > validationConfig.findingPolicy.psiHigh ? 'High shift' : psi >= validationConfig.findingPolicy.psiModerate ? 'Moderate shift' : 'Low shift'
 
     const distributionOption: echarts.EChartsOption | null = activeVariable ? {
       backgroundColor: 'transparent',
@@ -2882,8 +2911,8 @@ function App() {
           label: { color: '#91a0b7' },
           lineStyle: { type: 'dashed', width: 1 },
           data: [
-            { yAxis: result.thresholds.moderate, label: { formatter: '0.10 · moderate' }, lineStyle: { color: '#d99a3e' } },
-            { yAxis: result.thresholds.high, label: { formatter: '0.25 · high' }, lineStyle: { color: '#e56f6f' } },
+            { yAxis: validationConfig.findingPolicy.psiModerate, label: { formatter: `${validationConfig.findingPolicy.psiModerate.toFixed(2)} · moderate` }, lineStyle: { color: '#d99a3e' } },
+            { yAxis: validationConfig.findingPolicy.psiHigh, label: { formatter: `${validationConfig.findingPolicy.psiHigh.toFixed(2)} · high` }, lineStyle: { color: '#e56f6f' } },
             ...(cutoffMarkLine ? cutoffMarkLine.data : []),
           ],
         },
@@ -2949,7 +2978,7 @@ function App() {
         {activeComparison && (
           <>
             <section className="panel stability-summary-section">
-              <div className="panel-title"><div><h2 className="heading-with-help">PSI summary {metricHelp('psi', 'Population Stability Index')}</h2><p className="eda-muted">Default thresholds are heuristic: PSI &lt; 0.10 low, 0.10–0.25 moderate, &gt; 0.25 high.</p></div></div>
+              <div className="panel-title"><div><h2 className="heading-with-help">PSI summary {metricHelp('psi', 'Population Stability Index')}</h2><p className="eda-muted">Current finding policy: PSI &lt; {validationConfig.findingPolicy.psiModerate.toFixed(2)} low, {validationConfig.findingPolicy.psiModerate.toFixed(2)}–{validationConfig.findingPolicy.psiHigh.toFixed(2)} moderate, &gt; {validationConfig.findingPolicy.psiHigh.toFixed(2)} high.</p></div></div>
               <div className="table-wrap">
                 <table className="stability-summary-table">
                   <thead><tr><th>Variable</th><th><span className="metric-label-with-help">PSI {metricHelp('psi', 'Population Stability Index')}</span></th><th>Reference mean</th><th>Comparison mean</th><th>Missing Δ</th><th>Status</th></tr></thead>
@@ -2965,7 +2994,7 @@ function App() {
                   ))}</tbody>
                 </table>
               </div>
-              <div className="eda-sample-note">{result.thresholds.note} Click a variable row to inspect its distribution.</div>
+              <div className="eda-sample-note">Finding thresholds are configurable in Validation. Current PSI policy: moderate from {validationConfig.findingPolicy.psiModerate.toFixed(2)}, high above {validationConfig.findingPolicy.psiHigh.toFixed(2)}. Click a variable row to inspect its distribution.</div>
             </section>
 
             {activeVariable && distributionOption && (
