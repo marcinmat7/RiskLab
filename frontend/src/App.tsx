@@ -1966,25 +1966,6 @@ function App() {
       lineStyle: { type: 'dashed' as const, width: 1, color: '#9aa9bd' },
       data: [{ xAxis: edaCutoffBucket }],
     } : undefined
-    const timeMissingOption = (column: string): echarts.EChartsOption => ({
-      backgroundColor: 'transparent',
-      tooltip: { trigger: 'axis' },
-      toolbox: { right: 8, feature: { dataZoom: { yAxisIndex: 'none' }, restore: {} } },
-      grid: { left: 58, right: 18, top: 28, bottom: 66 },
-      xAxis: { type: 'category', data: currentTimeBuckets.map((bucket) => bucket.bucket), boundaryGap: false, axisLabel: { color: '#71809a' } },
-      yAxis: { type: 'value', min: 0, max: 1, name: 'Missing', axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' }, splitLine: { lineStyle: { color: '#1b293d' } } },
-      dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, bottom: 12, height: 18 }],
-      series: [{
-        name: 'Missing %',
-        type: 'line',
-        showSymbol: false,
-        data: currentTimeBuckets.map((bucket) => bucket.variables[column]?.missing_rate ?? null),
-        lineStyle: { width: 2, color: '#8b99ad' },
-        areaStyle: { opacity: .08, color: '#8b99ad' },
-        markLine: edaCutoffMarkLine,
-      }],
-    })
-
     const timeStatsOption = (column: string): echarts.EChartsOption => ({
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
@@ -2723,8 +2704,15 @@ function App() {
                 name: `${group.value} · Observed`,
                 type: 'line' as const,
                 showSymbol: true,
-                data: timeCategories.map((bucket) => lookup.get(bucket)?.default_rate ?? null),
-                lineStyle: { width: 2 },
+                data: timeCategories.map((bucket) => {
+                  const point = lookup.get(bucket)
+                  if (!point) return null
+                  return {
+                    value: point.default_rate,
+                    itemStyle: { color: point.default_rate > point.mean_pd ? '#ff6b6b' : point.default_rate < point.mean_pd ? '#69e7ad' : '#9aa9bd' },
+                  }
+                }),
+                lineStyle: { width: 2, color: '#9aa9bd' },
               },
             ]
           }) ?? []),
