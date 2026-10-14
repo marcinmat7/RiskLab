@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import defaultFindingPolicyJson from './finding-policy.default.json'
+import { generateSelfContainedReport, type ReportFinding, type ReportInput } from './report'
 
 type HealthResponse = { status: string; service: string }
 
@@ -902,6 +903,11 @@ function App() {
   const [validationConfig, setValidationConfig] = useState<ValidationConfig>(initialConfig)
   const [findingPolicy, setFindingPolicy] = useState<FindingPolicy>(defaultFindingPolicy)
   const [findingPolicyMessage, setFindingPolicyMessage] = useState<string | null>(null)
+  const [fullRunStatus, setFullRunStatus] = useState<'idle' | 'running' | 'ready' | 'failed'>('idle')
+  const [fullRunStep, setFullRunStep] = useState('')
+  const [fullRunError, setFullRunError] = useState<string | null>(null)
+  const [reportHtml, setReportHtml] = useState('')
+  const [reportGeneratedAt, setReportGeneratedAt] = useState('')
   const [analysisStatus, setAnalysisStatus] = useState<Record<AnalysisSection, AnalysisStatus>>(initialStatuses)
   const [lastRun, setLastRun] = useState<Partial<Record<AnalysisSection, string>>>({})
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null)
