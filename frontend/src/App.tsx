@@ -1463,6 +1463,220 @@ function App() {
     }
   }
 
+  const makeReportHtml = (results?: {
+    eda?: EdaResult | null
+    discrimination?: DiscriminationResult | null
+    calibration?: CalibrationResult | null
+    stability?: StabilityResult | null
+    validationWarnings?: ValidationParsingWarning[]
+  }) => {
+    if (!preview) return { html: '', generatedAt: '' }
+    const currentEda = results?.eda === undefined ? edaResult : results.eda
+    const currentDiscrimination = results?.discrimination === undefined ? discriminationResult : results.discrimination
+    const currentCalibration = results?.calibration === undefined ? calibrationResult : results.calibration
+    const currentStability = results?.stability === undefined ? stabilityResult : results.stability
+    const findings = collectFindings({
+      validationWarnings: results?.validationWarnings,
+      eda: currentEda,
+      discrimination: currentDiscrimination,
+      calibration: currentCalibration,
+      stability: currentStability,
+    })
+
+    const psiByVariable = new Map<string, number>()
+    currentStability?.comparisons.forEach((comparison) => {
+      comparison.variables.forEach((variable) => {
+        psiByVariable.set(variable.column, Math.max(psiByVariable.get(variable.column) ?? 0, variable.psi))
+      })
+    })
+
+    const generatedAt = new Date().toLocaleString()
+    const input: ReportInput = {
+      generatedAt,
+      dataset: {
+        filename: preview.filename,
+        rows: preview.row_count,
+        columns: preview.column_count,
+      },
+      validation: {
+        predictionColumn: validationConfig.predictionColumn,
+        predictionType: validationConfig.predictionType,
+        targetColumn: validationConfig.targetColumn,
+        positiveClass: validationConfig.positiveClass,
+        timeColumn: validationConfig.timeColumn,
+        timeCutoffDate: validationConfig.timeCutoffDate,
+        populationColumns: validationConfig.populationColumns,
+        sensitiveColumns: validationConfig.sensitiveColumns,
+        featureColumns: validationConfig.featureColumns,
+      },
+      policy: {
+        id: findingPolicy.id,
+        name: findingPolicy.name,
+        version: findingPolicy.version,
+        schemaVersion: findingPolicy.schemaVersion,
+        minimumObservations: findingPolicy.global.minimumObservations,
+        minimumDefaults: findingPolicy.global.minimumDefaults,
+        minimumNonDefaults: findingPolicy.global.minimumNonDefaults,
+      },
+      discrimination: currentDiscrimination ? {
+        observations: currentDiscrimination.overall.observations,
+        defaults: currentDiscrimination.overall.defaults,
+        defaultRate: currentDiscrimination.overall.default_rate,
+        auc: currentDiscrimination.overall.auc,
+        gini: currentDiscrimination.overall.gini,
+        ks: currentDiscrimination.overall.ks,
+        badCapture10: currentDiscrimination.overall.bad_capture_10,
+        roc: currentDiscrimination.overall.roc.map((point) => ({ fpr: point.fpr, tpr: point.tpr })),
+      } : null,
+      calibration: currentCalibration ? {
+        brier: currentCalibration.overall.brier_score,
+        oe: currentCalibration.overall.oe_ratio,
+        meanPd: currentCalibration.overall.mean_pd,
+        defaultRate: currentCalibration.overall.default_rate,
+        spiegelhalterP: currentCalibration.overall.spiegelhalter_p_value,
+        bins: currentCalibration.overall.calibration_bins.map((row) => ({
+          meanPd: row.mean_pd,
+          observedRate: row.observed_default_rate,
+        })),
+      } : null,
+      stability: [...psiByVariable.entries()].map(([variable, psi]) => ({ variable, psi })),
+      dataQuality: currentEda ? {
+        missingRate: currentEda.overview.missing_rate,
+        duplicateRows: currentEda.overview.duplicate_rows,
+        duplicateRate: currentEda.overview.duplicate_rate,
+      } : null,
+      findings: findings.map((finding): ReportFinding => ({
+        area: finding.area,
+        description: finding.description,
+        metrics: finding.metrics,
+        severity: finding.severity,
+        criteria: finding.criteria,
+      })),
+    }
+    return { html: generateSelfContainedReport(input), generatedAt }
+  }
+
+  const downloadReport = () => {
+    if (!reportHtml || !preview) return
+    const blob = new Blob([reportHtml], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const baseName = (preview.filename || 'dataset').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '_')
+    anchor.href = url
+    anchor.download = `${baseName}_risklab_report.html`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const runFullValidationAndReport = async () => {
+    if (!preview || !validationReady || fullRunStatus === 'running') return
+    setFullRunStatus('running')
+    setFullRunError(null)
+    setReportHtml('')
+    setReportGeneratedAt('')
+
+    const startedAt = new Date().toLocaleString()
+    const setRunning = (section: AnalysisSection) =>
+      setAnalysisStatus((current) => ({ ...current, [section]: 'running' }))
+
+    const post = async <T,>(path: string, extra?: Record<string, string>): Promise<T> => {
+      const formData = new FormData()
+      formData.append('dataset_id', preview.dataset_id)
+      formData.append('config', JSON.stringify(validationConfig))
+      Object.entries(extra ?? {}).forEach(([key, value]) => formData.append(key, value))
+      const response = await fetch(`http://localhost:8000${path}`, { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      return body as T
+    }
+
+    try {
+      setFullRunStep('Running EDA, discrimination, calibration and stability…')
+      setRunning('EDA')
+      setRunning('Discrimination')
+      setRunning('Stability')
+      if (validationConfig.predictionType === 'pd') setRunning('Calibration')
+
+      const [eda, discrimination, calibration, stability] = await Promise.all([
+        post<EdaResult>('/eda/run', { time_granularity: timeGranularity }),
+        post<DiscriminationResult>('/discrimination/run', { time_granularity: discriminationGranularity }),
+        validationConfig.predictionType === 'pd' ? post<CalibrationResult>('/calibration/run') : Promise.resolve(null),
+        post<StabilityResult>('/stability/run'),
+      ])
+
+      setEdaResult(eda)
+      setDiscriminationResult(discrimination)
+      setCalibrationResult(calibration)
+      setStabilityResult(stability)
+
+      setEdaTimeVariable(eda.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column ?? '')
+      setEdaTimeMissingColumn(eda.profiles.find((profile) => profile.missing_count > 0)?.column ?? eda.profiles[0]?.column ?? '')
+      setTimeWorkspace(eda.time_analysis?.numeric_columns.slice(0, 2) ?? [])
+      setDiscriminationSegmentKey(discrimination.segment_performance[0]?.key ?? '')
+      setDiscriminationTimeSegmentKey('overall')
+      setCalibrationSegmentKey(calibration?.segment_performance[0]?.key ?? '')
+      setCalibrationTimeSegmentKey('overall')
+
+      const firstSource = stability.sources[0]
+      const firstReference = firstSource?.groups[0]?.value ?? ''
+      const firstComparison = firstSource?.groups.find((group) => group.value !== firstReference)?.value ?? ''
+      setStabilitySourceKey(firstSource?.key ?? '')
+      setStabilityReference(firstReference)
+      setStabilityComparison(firstComparison)
+      setStabilityVariable(stability.comparisons.find((item) =>
+        item.source_key === firstSource?.key &&
+        item.reference === firstReference &&
+        item.comparison === firstComparison
+      )?.variables[0]?.column ?? stability.variables[0]?.column ?? '')
+
+      setFullRunStep('Generating findings and self-contained HTML report…')
+      const generated = makeReportHtml({
+        eda,
+        discrimination,
+        calibration,
+        stability,
+        validationWarnings: validationParsingWarnings,
+      })
+      setReportHtml(generated.html)
+      setReportGeneratedAt(generated.generatedAt)
+
+      setAnalysisStatus((current) => ({
+        ...current,
+        EDA: 'ready',
+        Discrimination: 'ready',
+        Calibration: validationConfig.predictionType === 'pd' ? 'ready' : 'unavailable',
+        Stability: 'ready',
+        Findings: 'ready',
+        Reports: 'ready',
+      }))
+      setLastRun((current) => ({
+        ...current,
+        EDA: startedAt,
+        Discrimination: startedAt,
+        Calibration: validationConfig.predictionType === 'pd' ? startedAt : current.Calibration,
+        Stability: startedAt,
+        Findings: generated.generatedAt,
+        Reports: generated.generatedAt,
+      }))
+      setFullRunStep('Full validation completed.')
+      setFullRunStatus('ready')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Full validation failed.'
+      setFullRunError(message)
+      setFullRunStep('')
+      setFullRunStatus('failed')
+      setAnalysisStatus((current) => ({
+        ...current,
+        EDA: current.EDA === 'running' ? 'failed' : current.EDA,
+        Discrimination: current.Discrimination === 'running' ? 'failed' : current.Discrimination,
+        Calibration: current.Calibration === 'running' ? 'failed' : current.Calibration,
+        Stability: current.Stability === 'running' ? 'failed' : current.Stability,
+      }))
+    }
+  }
+
   const collectFindings = (results?: {
     validationWarnings?: ValidationParsingWarning[]
     eda?: EdaResult | null
