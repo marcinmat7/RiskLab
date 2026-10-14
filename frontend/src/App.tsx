@@ -3409,7 +3409,7 @@ function App() {
                   ))}</tbody>
                 </table>
               </div>
-              <div className="eda-sample-note">Finding thresholds are configurable in Validation. Current PSI policy: moderate from {findingPolicy.rules.stability.psi.yellowFrom.toFixed(2)}, high above {findingPolicy.rules.stability.psi.redAbove.toFixed(2)}. Click a variable row to inspect its distribution.</div>
+              <div className="eda-sample-note">Finding thresholds come from the active Finding Policy. Current PSI policy: moderate from {findingPolicy.rules.stability.psi.yellowFrom.toFixed(2)}, high above {findingPolicy.rules.stability.psi.redAbove.toFixed(2)}. Click a variable row to inspect its distribution.</div>
             </section>
 
             {activeVariable && distributionOption && (
