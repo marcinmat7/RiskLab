@@ -1068,6 +1068,51 @@ function App() {
     setValidationConfigMessage({ tone: 'success', title: 'Validation configuration exported', details: ['The JSON contains the complete current Validation setup.'] })
   }
 
+  const exportFindingPolicy = () => {
+    const blob = new Blob([JSON.stringify(findingPolicy, null, 2) + '\n'], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${findingPolicy.id || 'risklab-finding-policy'}.json`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    setFindingPolicyMessage('Finding policy exported.')
+  }
+
+  const importFindingPolicy = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const parsed = JSON.parse(await file.text()) as FindingPolicy
+      if (
+        parsed?.schemaVersion !== 1 ||
+        parsed?.kind !== 'risklab-finding-policy' ||
+        !parsed.id ||
+        !parsed.name ||
+        !parsed.version ||
+        !parsed.global ||
+        !parsed.rules?.dataQuality ||
+        !parsed.rules?.discrimination ||
+        !parsed.rules?.calibration ||
+        !parsed.rules?.stability
+      ) {
+        throw new Error('Unsupported RiskLab finding policy file.')
+      }
+      setFindingPolicy(parsed)
+      setFindingPolicyMessage(`Loaded ${parsed.name} v${parsed.version}.`)
+    } catch (err) {
+      setFindingPolicyMessage(err instanceof Error ? err.message : 'Could not import finding policy.')
+    }
+  }
+
+  const resetFindingPolicy = () => {
+    setFindingPolicy(defaultFindingPolicy)
+    setFindingPolicyMessage(`Restored ${defaultFindingPolicy.name} v${defaultFindingPolicy.version}.`)
+  }
+
   const importValidationConfig = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1410,6 +1455,350 @@ function App() {
       setStabilityError(err instanceof Error ? err.message : 'Stability analysis failed.')
       setAnalysisStatus((current) => ({ ...current, Stability: 'failed' }))
     }
+  }
+
+  const renderFindings = () => {
+    if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
+
+    const findings: Finding[] = []
+    const minN = findingPolicy.global.minimumObservations
+    const minDefaults = findingPolicy.global.minimumDefaults
+    const minNonDefaults = findingPolicy.global.minimumNonDefaults
+    const pct = (value: number) => `${(value * 100).toFixed(1)}%`
+    const pp = (value: number) => `${(value * 100).toFixed(1)} pp`
+
+    const addFinding = (
+      id: string,
+      area: string,
+      description: string,
+      metrics: string[],
+      severity: FindingSeverity,
+      criteria: string,
+    ) => findings.push({ id, area, description, metrics, severity, criteria })
+
+    const eligiblePerformance = (observations: number, defaults: number) =>
+      observations >= minN && defaults >= minDefaults && observations - defaults >= minNonDefaults
+
+    if (findingPolicy.rules.validation.parsingFailure.enabled) {
+      validationParsingWarnings.forEach((warning) => {
+        if (warning.invalid_count > 0) {
+          addFinding(
+            `parsing-${warning.column}`,
+            'Validation',
+            `${warning.column} could not be fully parsed as ${warning.requested_semantic_type}; RiskLab fell back to ${warning.effective_semantic_type}.`,
+            [`${warning.invalid_count.toLocaleString()} invalid values`, `${warning.non_missing_count.toLocaleString()} non-missing`],
+            'yellow',
+            'Yellow: any non-missing parsing failure',
+          )
+        }
+      })
+    }
+
+    if (edaResult) {
+      const missingRule = findingPolicy.rules.dataQuality.missingRate
+      const constantRule = findingPolicy.rules.dataQuality.constantVariable
+      const dominantRule = findingPolicy.rules.dataQuality.dominantValueShare
+      edaResult.profiles.forEach((profile) => {
+        if (edaResult.overview.rows < minN) return
+        if (missingRule.enabled && profile.missing_rate > missingRule.yellowAbove) {
+          const severity: FindingSeverity = profile.missing_rate > missingRule.redAbove ? 'red' : 'yellow'
+          addFinding(
+            `missing-${profile.column}`,
+            'EDA',
+            `High missing rate in ${profile.column}.`,
+            [`Missing ${pct(profile.missing_rate)}`, `n=${edaResult.overview.rows.toLocaleString()}`],
+            severity,
+            `Yellow > ${pct(missingRule.yellowAbove)} · Red > ${pct(missingRule.redAbove)}`,
+          )
+        }
+
+        if (
+          constantRule.enabled &&
+          profile.unique_count !== null &&
+          profile.unique_count <= constantRule.redUniqueNonMissingAtMost
+        ) {
+          addFinding(
+            `constant-${profile.column}`,
+            'EDA',
+            `${profile.column} is constant or has no usable variation.`,
+            [`Unique non-missing: ${profile.unique_count}`],
+            'red',
+            `Red: unique non-missing ≤ ${constantRule.redUniqueNonMissingAtMost}`,
+          )
+        }
+
+        const dominantShare = profile.categories?.[0]?.share
+        if (dominantRule.enabled && dominantShare !== undefined && dominantShare > dominantRule.yellowAbove) {
+          const severity: FindingSeverity = dominantShare > dominantRule.redAbove ? 'red' : 'yellow'
+          addFinding(
+            `dominant-${profile.column}`,
+            'EDA',
+            `${profile.column} is near-constant; one category dominates the observed sample.`,
+            [`Top category share ${pct(dominantShare)}`, `Top: ${profile.categories?.[0]?.value ?? '—'}`],
+            severity,
+            `Yellow > ${pct(dominantRule.yellowAbove)} · Red > ${pct(dominantRule.redAbove)}`,
+          )
+        }
+      })
+
+      const duplicateRule = findingPolicy.rules.dataQuality.duplicateRate
+      if (duplicateRule.enabled && edaResult.overview.rows >= minN && edaResult.overview.duplicate_rate > duplicateRule.yellowAbove) {
+        addFinding(
+          'duplicate-rows',
+          'EDA',
+          'Duplicate rows were detected in the dataset.',
+          [`${edaResult.overview.duplicate_rows.toLocaleString()} rows`, `${pct(edaResult.overview.duplicate_rate)} of dataset`],
+          edaResult.overview.duplicate_rate > duplicateRule.redAbove ? 'red' : 'yellow',
+          `Yellow > ${pct(duplicateRule.yellowAbove)} · Red > ${pct(duplicateRule.redAbove)}`,
+        )
+      }
+
+      const cutoffRule = findingPolicy.rules.cutoff.missingRateIncrease
+      const daily = edaResult.time_analysis?.granularities.daily ?? []
+      if (cutoffRule.enabled && validationConfig.timeCutoffDate && daily.length) {
+        edaResult.time_analysis?.numeric_columns.forEach((column) => {
+          const pre = daily.filter((bucket) => bucket.bucket < validationConfig.timeCutoffDate)
+          const post = daily.filter((bucket) => bucket.bucket >= validationConfig.timeCutoffDate)
+          const summarize = (rows: typeof daily) => {
+            const observations = rows.reduce((sum, row) => sum + row.observations, 0)
+            const missing = rows.reduce((sum, row) => sum + row.observations * (row.variables[column]?.missing_rate ?? 0), 0)
+            return { observations, rate: observations ? missing / observations : 0 }
+          }
+          const preSummary = summarize(pre)
+          const postSummary = summarize(post)
+          if (preSummary.observations < minN || postSummary.observations < minN) return
+          const increase = postSummary.rate - preSummary.rate
+          if (increase > cutoffRule.yellowAbove) {
+            addFinding(
+              `cutoff-missing-${column}`,
+              'EDA',
+              `Missingness in ${column} increased after the configured time cut-off.`,
+              [`Pre ${pct(preSummary.rate)}`, `Post ${pct(postSummary.rate)}`, `Increase ${pp(increase)}`],
+              increase > cutoffRule.redAbove ? 'red' : 'yellow',
+              `Yellow increase > ${pp(cutoffRule.yellowAbove)} · Red > ${pp(cutoffRule.redAbove)} · post must be higher`,
+            )
+          }
+        })
+      }
+    }
+
+    if (discriminationResult) {
+      const aucRule = findingPolicy.rules.discrimination.auc
+      const assessAuc = (context: string, metrics: { observations: number; defaults: number; auc: number | null }, id: string) => {
+        if (!aucRule.enabled || metrics.auc === null || !eligiblePerformance(metrics.observations, metrics.defaults)) return
+        if (metrics.auc < aucRule.yellowBelow) {
+          addFinding(
+            id,
+            'Discrimination',
+            `Weak discriminatory power${context === 'Overall' ? '' : ` in ${context}`}.`,
+            [`AUC ${metrics.auc.toFixed(3)}`, `n=${metrics.observations.toLocaleString()}`, `defaults=${metrics.defaults.toLocaleString()}`],
+            metrics.auc < aucRule.redBelow ? 'red' : 'yellow',
+            `Yellow AUC < ${aucRule.yellowBelow.toFixed(2)} · Red < ${aucRule.redBelow.toFixed(2)} · n≥${minN}, defaults≥${minDefaults}, non-defaults≥${minNonDefaults}`,
+          )
+        }
+      }
+      assessAuc('Overall', discriminationResult.overall, 'auc-overall')
+      if (findingPolicy.global.evaluateSegments) {
+        discriminationResult.segment_performance.forEach((segment) => {
+          segment.groups.forEach((group) => assessAuc(`${segment.name}: ${group.value}`, group, `auc-${segment.key}-${group.value}`))
+        })
+      }
+
+      const dropRule = findingPolicy.rules.discrimination.aucDrop
+      if (dropRule.enabled && validationConfig.timeCutoffAsSegment) {
+        discriminationResult.segment_performance
+          .filter((segment) => segment.columns.includes('__time_cutoff__'))
+          .forEach((segment) => {
+            const beforeSuffix = validationConfig.timeCutoffBeforeLabel
+            const afterSuffix = validationConfig.timeCutoffAfterLabel
+            const beforeMap = new Map<string, typeof segment.groups[number]>()
+            const afterMap = new Map<string, typeof segment.groups[number]>()
+            segment.groups.forEach((group) => {
+              if (group.value === beforeSuffix) beforeMap.set('Overall', group)
+              else if (group.value === afterSuffix) afterMap.set('Overall', group)
+              else if (group.value.endsWith(` × ${beforeSuffix}`)) beforeMap.set(group.value.slice(0, -(` × ${beforeSuffix}`).length), group)
+              else if (group.value.endsWith(` × ${afterSuffix}`)) afterMap.set(group.value.slice(0, -(` × ${afterSuffix}`).length), group)
+            })
+            beforeMap.forEach((before, key) => {
+              const after = afterMap.get(key)
+              if (!after || before.auc === null || after.auc === null) return
+              if (!eligiblePerformance(before.observations, before.defaults) || !eligiblePerformance(after.observations, after.defaults)) return
+              const drop = before.auc - after.auc
+              if (drop > dropRule.yellowAbove) {
+                addFinding(
+                  `auc-drop-${segment.key}-${key}`,
+                  'Discrimination',
+                  `AUC deteriorated after the time cut-off${key === 'Overall' ? '' : ` in ${key}`}.`,
+                  [`Pre AUC ${before.auc.toFixed(3)}`, `Post AUC ${after.auc.toFixed(3)}`, `Drop ${drop.toFixed(3)}`],
+                  drop > dropRule.redAbove ? 'red' : 'yellow',
+                  `Yellow drop > ${dropRule.yellowAbove.toFixed(2)} · Red > ${dropRule.redAbove.toFixed(2)}; minimum sample/default rules apply on both sides`,
+                )
+              }
+            })
+          })
+      }
+    }
+
+    if (calibrationResult) {
+      const spiegelhalter = findingPolicy.rules.calibration.spiegelhalter
+      const oe = findingPolicy.rules.calibration.oeRatio
+      const gapRule = findingPolicy.rules.calibration.absoluteGap
+      const assessCalibration = (context: string, row: CalibrationSummary, id: string) => {
+        if (!eligiblePerformance(row.observations, row.defaults)) return
+
+        if (spiegelhalter.enabled && row.spiegelhalter_p_value !== null && row.spiegelhalter_p_value < spiegelhalter.yellowBelow) {
+          addFinding(
+            `cal-spiegel-${id}`,
+            'Calibration',
+            `Spiegelhalter test indicates miscalibration${context === 'Overall' ? '' : ` in ${context}`}.`,
+            [`p=${row.spiegelhalter_p_value.toFixed(4)}`, `DR ${pct(row.default_rate)}`, `PD ${pct(row.mean_pd)}`],
+            row.spiegelhalter_p_value < spiegelhalter.redBelow ? 'red' : 'yellow',
+            `Yellow p < ${spiegelhalter.yellowBelow.toFixed(2)} · Red p < ${spiegelhalter.redBelow.toFixed(2)}`,
+          )
+        }
+
+        if (oe.enabled && row.oe_ratio !== null) {
+          const red = row.oe_ratio < oe.redBelow || row.oe_ratio > oe.redAbove
+          const yellow = row.oe_ratio < oe.yellowBelow || row.oe_ratio > oe.yellowAbove
+          if (yellow) addFinding(
+            `cal-oe-${id}`,
+            'Calibration',
+            `Observed / Expected ratio is outside policy tolerance${context === 'Overall' ? '' : ` in ${context}`}.`,
+            [`O/E ${row.oe_ratio.toFixed(3)}`, `DR ${pct(row.default_rate)}`, `PD ${pct(row.mean_pd)}`],
+            red ? 'red' : 'yellow',
+            `Yellow outside [${oe.yellowBelow.toFixed(2)}, ${oe.yellowAbove.toFixed(2)}] · Red outside [${oe.redBelow.toFixed(2)}, ${oe.redAbove.toFixed(2)}]`,
+          )
+        }
+
+        const gap = Math.abs(row.default_rate - row.mean_pd)
+        if (gapRule.enabled && gap > gapRule.yellowAbove) {
+          addFinding(
+            `cal-gap-${id}`,
+            'Calibration',
+            `Absolute default-rate / PD gap exceeds policy tolerance${context === 'Overall' ? '' : ` in ${context}`}.`,
+            [`|DR−PD| ${pp(gap)}`, `DR ${pct(row.default_rate)}`, `PD ${pct(row.mean_pd)}`],
+            gap > gapRule.redAbove ? 'red' : 'yellow',
+            `Yellow > ${pp(gapRule.yellowAbove)} · Red > ${pp(gapRule.redAbove)}`,
+          )
+        }
+      }
+      assessCalibration('Overall', calibrationResult.overall, 'overall')
+      if (findingPolicy.global.evaluateSegments) {
+        calibrationResult.segment_performance.forEach((segment) => {
+          segment.groups.forEach((group) => assessCalibration(`${segment.name}: ${group.value}`, group, `${segment.key}-${group.value}`))
+        })
+      }
+    }
+
+    if (stabilityResult) {
+      const psiRule = findingPolicy.rules.stability.psi
+      const missingShiftRule = findingPolicy.rules.stability.missingRateIncrease
+      stabilityResult.sources.forEach((source) => {
+        const defaultReference = source.groups[0]?.value
+        if (!defaultReference) return
+        stabilityResult.comparisons
+          .filter((comparison) => comparison.source_key === source.key && comparison.reference === defaultReference)
+          .forEach((comparison) => {
+            if (comparison.reference_observations < minN || comparison.comparison_observations < minN) return
+            comparison.variables.forEach((variable) => {
+              const context = `${source.name}: ${comparison.reference} → ${comparison.comparison} · ${variable.column}`
+              if (psiRule.enabled && variable.psi >= psiRule.yellowFrom) {
+                addFinding(
+                  `psi-${source.key}-${comparison.reference}-${comparison.comparison}-${variable.column}`,
+                  'Stability',
+                  `Population stability shift detected for ${variable.column}.`,
+                  [`PSI ${variable.psi.toFixed(3)}`, `${comparison.reference} → ${comparison.comparison}`],
+                  variable.psi > psiRule.redAbove ? 'red' : 'yellow',
+                  `Yellow PSI ≥ ${psiRule.yellowFrom.toFixed(2)} · Red > ${psiRule.redAbove.toFixed(2)} · n≥${minN} in both populations`,
+                )
+              }
+              if (missingShiftRule.enabled && variable.missing_delta > missingShiftRule.yellowAbove) {
+                addFinding(
+                  `stability-missing-${source.key}-${comparison.reference}-${comparison.comparison}-${variable.column}`,
+                  'Stability',
+                  `Missingness increased materially for ${variable.column} (${context}).`,
+                  [`Reference ${pct(variable.reference_missing_rate)}`, `Comparison ${pct(variable.comparison_missing_rate)}`, `Increase ${pp(variable.missing_delta)}`],
+                  variable.missing_delta > missingShiftRule.redAbove ? 'red' : 'yellow',
+                  `Yellow increase > ${pp(missingShiftRule.yellowAbove)} · Red > ${pp(missingShiftRule.redAbove)} · comparison must be higher`,
+                )
+              }
+            })
+          })
+      })
+    }
+
+    findings.sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === 'red' ? -1 : 1
+      return a.area.localeCompare(b.area) || a.description.localeCompare(b.description)
+    })
+
+    const redCount = findings.filter((finding) => finding.severity === 'red').length
+    const yellowCount = findings.filter((finding) => finding.severity === 'yellow').length
+
+    return (
+      <section className="page-content findings-page">
+        <div className="analysis-page-header">
+          <div>
+            <p className="eyebrow">Findings</p>
+            <h1>Validation findings</h1>
+            <p>Policy-driven exceptions generated from the validation analyses currently available in this session.</p>
+          </div>
+          <div className="findings-counts">
+            <span className="finding-severity red">{redCount} Red</span>
+            <span className="finding-severity yellow">{yellowCount} Yellow</span>
+          </div>
+        </div>
+
+        <section className="panel finding-policy-summary">
+          <div className="finding-policy-summary-head">
+            <div>
+              <p className="eyebrow">Finding policy used</p>
+              <h2>{findingPolicy.name}</h2>
+              <p><code>{findingPolicy.id}</code> · version {findingPolicy.version} · schema v{findingPolicy.schemaVersion}</p>
+            </div>
+            <div className="finding-policy-actions">
+              <label className="secondary-button config-file-button">Import policy<input type="file" accept=".json,application/json" onChange={importFindingPolicy} /></label>
+              <button className="secondary-button" onClick={exportFindingPolicy}>Export policy</button>
+              <button className="text-button" onClick={resetFindingPolicy}>Reset default</button>
+            </div>
+          </div>
+          <div className="finding-policy-global-grid">
+            <div><span>Minimum observations</span><strong>{findingPolicy.global.minimumObservations}</strong></div>
+            <div><span>Minimum defaults</span><strong>{findingPolicy.global.minimumDefaults}</strong></div>
+            <div><span>Minimum non-defaults</span><strong>{findingPolicy.global.minimumNonDefaults}</strong></div>
+            <div><span>Segment evaluation</span><strong>{findingPolicy.global.evaluateSegments ? 'Enabled' : 'Disabled'}</strong></div>
+            <div><span>Time persistence</span><strong>{findingPolicy.global.consecutivePeriodsRequired} period</strong></div>
+          </div>
+          {findingPolicyMessage && <div className="finding-policy-message">{findingPolicyMessage}</div>}
+        </section>
+
+        <section className="panel findings-table-panel">
+          <div className="panel-title">
+            <div><h2>Findings</h2><p className="eda-muted">Only rules whose required analysis results are currently available can produce a finding.</p></div>
+            <span>{findings.length} findings</span>
+          </div>
+          {findings.length ? (
+            <div className="table-wrap">
+              <table className="findings-table">
+                <thead><tr><th>Finding</th><th>Key metrics</th><th>Severity</th><th>Policy criteria</th></tr></thead>
+                <tbody>
+                  {findings.map((finding) => (
+                    <tr key={finding.id}>
+                      <td><span className="finding-area">{finding.area}</span><strong>{finding.description}</strong></td>
+                      <td><div className="finding-metrics">{finding.metrics.map((metric) => <span key={metric}>{metric}</span>)}</div></td>
+                      <td><span className={`finding-severity ${finding.severity}`}>{findingPolicy.global.severityLabels[finding.severity]}</span></td>
+                      <td className="finding-criteria">{finding.criteria}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="eda-no-data">No findings are triggered by the available analysis results and the current policy.</div>
+          )}
+        </section>
+      </section>
+    )
   }
 
   const renderMethodology = () => {
@@ -3100,7 +3489,7 @@ function App() {
         <div className="brand"><span className="brand-mark">▥</span><span>RiskLab</span></div>
         <nav>
           {navItems.map((item) => {
-            const status = analysisSections.includes(item as AnalysisSection) ? analysisStatus[item as AnalysisSection] : null
+            const status = item !== 'Findings' && analysisSections.includes(item as AnalysisSection) ? analysisStatus[item as AnalysisSection] : null
             return (
               <button key={item} className={activeSection === item ? 'nav-item active' : 'nav-item'} onClick={() => setActiveSection(item)}>
                 <span className="nav-icon">{item.slice(0, 1)}</span>
@@ -3123,8 +3512,9 @@ function App() {
         {activeSection === 'Discrimination' && renderDiscrimination()}
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
+        {activeSection === 'Findings' && renderFindings()}
         {activeSection === 'Methodology' && renderMethodology()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
