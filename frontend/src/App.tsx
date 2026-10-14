@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
+import defaultFindingPolicyJson from './finding-policy.default.json'
 
 type HealthResponse = { status: string; service: string }
 
@@ -48,20 +49,66 @@ type ValidationConfig = {
   sensitiveColumns: string[]
   featureColumns: string[]
   semanticTypes: Record<string, SemanticType>
-  findingPolicy: {
-    missingWatch: number
-    missingReview: number
-    psiModerate: number
-    psiHigh: number
-    spiegelhalterEvidence: number
-    spiegelhalterStrong: number
-  }
 }
 
 type ValidationConfigFile = {
   schemaVersion: 1
   kind: 'risklab-validation-config'
   validation: ValidationConfig
+}
+
+type FindingSeverity = 'yellow' | 'red'
+
+type FindingPolicy = {
+  schemaVersion: 1
+  kind: 'risklab-finding-policy'
+  id: string
+  name: string
+  version: string
+  global: {
+    minimumObservations: number
+    minimumDefaults: number
+    minimumNonDefaults: number
+    severityLabels: Record<FindingSeverity, string>
+    evaluateSegments: boolean
+    consecutivePeriodsRequired: number
+  }
+  rules: {
+    validation: {
+      parsingFailure: { enabled: boolean; yellowAnyFailure: boolean }
+    }
+    dataQuality: {
+      missingRate: { enabled: boolean; yellowAbove: number; redAbove: number }
+      duplicateRate: { enabled: boolean; yellowAbove: number; redAbove: number }
+      constantVariable: { enabled: boolean; redUniqueNonMissingAtMost: number }
+      dominantValueShare: { enabled: boolean; yellowAbove: number; redAbove: number }
+    }
+    cutoff: {
+      missingRateIncrease: { enabled: boolean; yellowAbove: number; redAbove: number; onlyIncrease: boolean }
+    }
+    discrimination: {
+      auc: { enabled: boolean; yellowBelow: number; redBelow: number }
+      aucDrop: { enabled: boolean; yellowAbove: number; redAbove: number }
+    }
+    calibration: {
+      spiegelhalter: { enabled: boolean; yellowBelow: number; redBelow: number }
+      oeRatio: { enabled: boolean; yellowBelow: number; yellowAbove: number; redBelow: number; redAbove: number }
+      absoluteGap: { enabled: boolean; yellowAbove: number; redAbove: number }
+    }
+    stability: {
+      psi: { enabled: boolean; yellowFrom: number; redAbove: number }
+      missingRateIncrease: { enabled: boolean; yellowAbove: number; redAbove: number; onlyIncrease: boolean }
+    }
+  }
+}
+
+type Finding = {
+  id: string
+  area: string
+  description: string
+  metrics: string[]
+  severity: FindingSeverity
+  criteria: string
 }
 
 type ValidationConfigMessage = {
@@ -622,14 +669,6 @@ const initialConfig: ValidationConfig = {
   sensitiveColumns: [],
   featureColumns: [],
   semanticTypes: {},
-  findingPolicy: {
-    missingWatch: 0.05,
-    missingReview: 0.20,
-    psiModerate: 0.10,
-    psiHigh: 0.25,
-    spiegelhalterEvidence: 0.05,
-    spiegelhalterStrong: 0.01,
-  },
 }
 
 const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
