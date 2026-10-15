@@ -27,7 +27,7 @@ type DatasetPreview = {
 }
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
-type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Findings' | 'Reports' | 'Methodology'
+type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Fairness' | 'Findings' | 'Reports' | 'Methodology'
 type AnalysisSection = Exclude<Section, 'Overview' | 'Data' | 'Methodology'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
@@ -427,8 +427,61 @@ type StabilityResult = {
   }
 }
 
-const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports', 'Methodology']
-const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports']
+
+type FairnessGroup = {
+  value: string
+  observations: number
+  defaults: number
+  default_rate: number
+  mean_prediction: number
+  mean_risk_score: number
+  auc: number | null
+  ks: number | null
+  high_risk_rate: number
+  favorable_selection_rate: number
+  tpr_bad_detection: number | null
+  fpr_bad_detection: number | null
+  tnr_good_acceptance: number | null
+  fnr_bad_missed: number | null
+  ppv_default_given_high_risk: number | null
+  npv_non_default_given_low_risk: number | null
+  mean_pd: number | null
+  calibration_gap: number | null
+  oe_ratio: number | null
+}
+
+type FairnessResult = {
+  high_risk_share: number
+  risk_threshold: number
+  risk_direction: 'higher-is-riskier'
+  prediction_type: PredictionType
+  attributes: {
+    column: string
+    semantic_type: SemanticType
+    mode: 'quantiles' | 'categories'
+    bins: string[]
+    edges: number[]
+    excluded_missing_sensitive: number
+    groups: FairnessGroup[]
+    summary: {
+      demographic_parity_gap: number | null
+      disparate_impact_ratio: number | null
+      bad_detection_tpr_gap: number | null
+      bad_detection_fpr_gap: number | null
+      equalized_odds_gap: number | null
+      auc_gap: number | null
+      calibration_gap_spread: number | null
+    }
+  }[]
+  excluded: {
+    missing_prediction: number
+    missing_target: number
+  }
+  notes: string[]
+}
+
+const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Fairness', 'Findings', 'Reports', 'Methodology']
+const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Fairness', 'Findings', 'Reports']
 
 type MethodologyEntry = {
   id: string
@@ -651,6 +704,7 @@ const analysisCopy: Record<AnalysisSection, { title: string; description: string
   Discrimination: { title: 'Discrimination', description: 'Evaluate ranking performance of the submitted model.', action: 'Run discrimination' },
   Calibration: { title: 'Calibration', description: 'Evaluate how predicted probabilities align with observed default rates.', action: 'Run calibration' },
   Stability: { title: 'Stability', description: 'Assess population and model stability over time or across samples.', action: 'Run stability analysis' },
+  Fairness: { title: 'Fairness', description: 'Compare model behaviour across configured sensitive attributes.', action: 'Run fairness analysis' },
   Findings: { title: 'Findings', description: 'Generate structured findings from completed validation analyses.', action: 'Generate findings' },
   Reports: { title: 'Reports', description: 'Generate a validation report from the analyses currently available.', action: 'Generate report' },
 }
@@ -680,6 +734,7 @@ const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
   Discrimination: 'blocked',
   Calibration: 'blocked',
   Stability: 'blocked',
+  Fairness: 'blocked',
   Findings: 'blocked',
   Reports: 'blocked',
 })
