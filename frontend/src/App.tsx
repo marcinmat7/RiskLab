@@ -1584,6 +1584,7 @@ function App() {
     discrimination?: DiscriminationResult | null
     calibration?: CalibrationResult | null
     stability?: StabilityResult | null
+    fairness?: FairnessResult | null
     validationWarnings?: ValidationParsingWarning[]
   }) => {
     if (!preview) return { html: '', generatedAt: '' }
@@ -1591,6 +1592,7 @@ function App() {
     const currentDiscrimination = results?.discrimination === undefined ? discriminationResult : results.discrimination
     const currentCalibration = results?.calibration === undefined ? calibrationResult : results.calibration
     const currentStability = results?.stability === undefined ? stabilityResult : results.stability
+    const currentFairness = results?.fairness === undefined ? fairnessResult : results.fairness
     const findings = collectFindings({
       validationWarnings: results?.validationWarnings,
       eda: currentEda,
@@ -1656,6 +1658,22 @@ function App() {
         })),
       } : null,
       stability: [...psiByVariable.entries()].map(([variable, psi]) => ({ variable, psi })),
+      fairness: (currentFairness?.attributes ?? []).map((attribute) => ({
+        attribute: attribute.column,
+        mode: attribute.mode,
+        demographicParityGap: attribute.summary.demographic_parity_gap,
+        disparateImpactRatio: attribute.summary.disparate_impact_ratio,
+        equalizedOddsGap: attribute.summary.equalized_odds_gap,
+        aucGap: attribute.summary.auc_gap,
+        groups: attribute.groups.map((group) => ({
+          value: group.value,
+          observations: group.observations,
+          defaultRate: group.default_rate,
+          favorableSelectionRate: group.favorable_selection_rate,
+          auc: group.auc,
+          calibrationGap: group.calibration_gap,
+        })),
+      })),
       dataQuality: currentEda ? {
         missingRate: currentEda.overview.missing_rate,
         duplicateRows: currentEda.overview.duplicate_rows,
@@ -1757,6 +1775,7 @@ function App() {
         discrimination,
         calibration,
         stability,
+        fairness,
         validationWarnings: validationParsingWarnings,
       })
       setReportHtml(generated.html)
