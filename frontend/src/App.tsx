@@ -2407,6 +2407,7 @@ function App() {
                 <div><strong>Findings</strong><span>Description, evidence, severity and policy criteria</span></div>
                 <div><strong>Configuration</strong><span>Dataset metadata, model mapping, time cut-off and segment roles</span></div>
                 <div><strong>Finding Policy</strong><span>Policy ID, version, schema and global sample requirements</span></div>
+                <div><strong>Fairness</strong><span>Sensitive-group parity and performance summary when configured</span></div>
                 <div><strong>Offline portability</strong><span>One HTML file with no external assets</span></div>
               </div>
             </section>
