@@ -717,3 +717,28 @@
 @media(max-width:620px){
   .report-content-grid { grid-template-columns:1fr; }
 }
+
+
+/* Fairness */
+.fairness-page { max-width: 1600px; }
+.fairness-run-card { margin-top:14px; padding:20px; display:grid; grid-template-columns:minmax(0,1fr) 180px auto; gap:18px; align-items:end; }
+.fairness-run-card h2 { margin:0 0 6px; color:#e8f0fb; }
+.fairness-run-card p { margin:0; color:#71809a; font-size:11px; line-height:1.5; }
+.fairness-operating-note,.fairness-threshold-note { margin-top:12px; padding:10px 12px; border:1px solid #2a3b56; border-radius:9px; background:#0a1422; color:#8192aa; font-size:10px; line-height:1.5; }
+.fairness-controls,.fairness-chart-section,.fairness-table-section,.fairness-method-note { margin-top:14px; padding:18px; }
+.fairness-summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:14px; }
+.fairness-table { min-width:1320px; }
+.fairness-table td:first-child strong { color:#e1eaf6; }
+.fairness-method-note { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:22px; }
+.fairness-method-note h2 { margin:0 0 6px; color:#e3ecf8; }
+.fairness-method-note p,.fairness-method-note li { color:#74869f; font-size:10px; line-height:1.55; }
+.fairness-method-note ul { margin:0; padding-left:18px; }
+.fairness-method-note li + li { margin-top:4px; }
+
+@media(max-width:1180px){
+  .fairness-run-card { grid-template-columns:1fr; align-items:start; }
+  .fairness-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:760px){
+  .fairness-summary-grid,.fairness-method-note { grid-template-columns:1fr; }
+}
