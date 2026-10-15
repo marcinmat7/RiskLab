@@ -2789,7 +2789,7 @@ function App() {
           </div>
 
           <div className="optional-setting stacked">
-            <div className="setting-copy"><h3>Sensitive attributes</h3><p>Mark columns such as sex or age for future fairness and bias analysis.</p><UsedBy modules={['Fairness']} /></div>
+            <div className="setting-copy"><h3>Sensitive attributes</h3><p>Mark columns such as sex or age for fairness and bias diagnostics. Continuous / ordinal attributes are split into three equal-frequency groups.</p><UsedBy modules={['Fairness']} /></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.sensitiveColumns} onChange={(value) => setValidationConfig({...validationConfig, sensitiveColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
 
