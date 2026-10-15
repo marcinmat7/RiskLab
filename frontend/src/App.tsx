@@ -1709,23 +1709,27 @@ function App() {
     }
 
     try {
-      setFullRunStep('Running EDA, discrimination, calibration and stability…')
+      setFullRunStep(validationConfig.sensitiveColumns.length ? 'Running EDA, discrimination, calibration, stability and fairness…' : 'Running EDA, discrimination, calibration and stability…')
       setRunning('EDA')
       setRunning('Discrimination')
       setRunning('Stability')
       if (validationConfig.predictionType === 'pd') setRunning('Calibration')
+      if (validationConfig.sensitiveColumns.length) setRunning('Fairness')
 
-      const [eda, discrimination, calibration, stability] = await Promise.all([
+      const [eda, discrimination, calibration, stability, fairness] = await Promise.all([
         post<EdaResult>('/eda/run', { time_granularity: timeGranularity }),
         post<DiscriminationResult>('/discrimination/run', { time_granularity: discriminationGranularity }),
         validationConfig.predictionType === 'pd' ? post<CalibrationResult>('/calibration/run') : Promise.resolve(null),
         post<StabilityResult>('/stability/run'),
+        validationConfig.sensitiveColumns.length ? post<FairnessResult>('/fairness/run', { high_risk_share: String(fairnessHighRiskShare) }) : Promise.resolve(null),
       ])
 
       setEdaResult(eda)
       setDiscriminationResult(discrimination)
       setCalibrationResult(calibration)
       setStabilityResult(stability)
+      setFairnessResult(fairness)
+      setFairnessAttribute(fairness?.attributes[0]?.column ?? '')
 
       setEdaTimeVariable(eda.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column ?? '')
       setEdaTimeMissingColumn(eda.profiles.find((profile) => profile.missing_count > 0)?.column ?? eda.profiles[0]?.column ?? '')
@@ -1764,6 +1768,7 @@ function App() {
         Discrimination: 'ready',
         Calibration: validationConfig.predictionType === 'pd' ? 'ready' : 'unavailable',
         Stability: 'ready',
+        Fairness: validationConfig.sensitiveColumns.length ? 'ready' : 'unavailable',
         Findings: 'ready',
         Reports: 'ready',
       }))
@@ -1773,6 +1778,7 @@ function App() {
         Discrimination: startedAt,
         Calibration: validationConfig.predictionType === 'pd' ? startedAt : current.Calibration,
         Stability: startedAt,
+        Fairness: validationConfig.sensitiveColumns.length ? startedAt : current.Fairness,
         Findings: generated.generatedAt,
         Reports: generated.generatedAt,
       }))
@@ -1789,6 +1795,7 @@ function App() {
         Discrimination: current.Discrimination === 'running' ? 'failed' : current.Discrimination,
         Calibration: current.Calibration === 'running' ? 'failed' : current.Calibration,
         Stability: current.Stability === 'running' ? 'failed' : current.Stability,
+        Fairness: current.Fairness === 'running' ? 'failed' : current.Fairness,
       }))
     }
   }
