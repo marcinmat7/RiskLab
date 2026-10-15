@@ -2081,6 +2081,178 @@ function App() {
     return findings
   }
 
+  const renderFairness = () => {
+    if (!preview) return <EmptyAnalysisState section="Fairness" onOpenData={() => setActiveSection('Data')} />
+
+    const status = analysisStatus.Fairness
+    if (!validationReady) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness</h1><p>Compare model behaviour across attributes configured as sensitive in Validation.</p></div>
+            <div className="analysis-status-pill blocked"><span />Blocked</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>◎</span></div>
+            <h2>Complete validation first</h2>
+            <p>Fairness uses the model output, target and Sensitive attributes configured in Validation.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (validationConfig.sensitiveColumns.length === 0) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness</h1><p>Compare model behaviour across configured sensitive groups.</p></div>
+            <div className="analysis-status-pill unavailable"><span />Not available</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>◎</span></div>
+            <h2>No sensitive attributes configured</h2>
+            <p>Select at least one Sensitive attribute in Validation. Continuous and ordinal attributes such as age are automatically split into three approximately equal-frequency groups.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Configure sensitive attributes</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (!fairnessResult) {
+      return (
+        <section className="page-content fairness-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness diagnostics</h1><p>Group-level performance, calibration and classification parity across sensitive attributes.</p></div>
+            <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+          </div>
+          {fairnessError && <div className="message error-message">{fairnessError}</div>}
+          <section className="panel fairness-run-card">
+            <div>
+              <h2>Ready to compare sensitive groups</h2>
+              <p>RiskLab evaluates {validationConfig.sensitiveColumns.join(', ')}. Continuous / ordinal attributes are split into three equal-frequency groups; categorical attributes use their observed categories.</p>
+              <div className="fairness-operating-note">Threshold-dependent metrics use a diagnostic operating point based on the riskiest share of the whole portfolio. This is not an approval threshold and is not a legal compliance decision.</div>
+            </div>
+            <label className="form-field compact-field"><span>High-risk share</span><select value={fairnessHighRiskShare} onChange={(event) => setFairnessHighRiskShare(Number(event.target.value))}><option value={0.10}>Top 10%</option><option value={0.20}>Top 20%</option><option value={0.30}>Top 30%</option></select><small>Used for parity metrics</small></label>
+            <button className="primary-button" disabled={status === 'running'} onClick={runFairness}>{status === 'running' ? 'Running…' : 'Run fairness analysis'}</button>
+          </section>
+        </section>
+      )
+    }
+
+    const result = fairnessResult
+    const activeAttribute = result.attributes.find((attribute) => attribute.column === fairnessAttribute) ?? result.attributes[0]
+
+    if (!activeAttribute) {
+      return (
+        <section className="page-content fairness-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness diagnostics</h1><p>No usable sensitive groups were found.</p></div>
+          </div>
+        </section>
+      )
+    }
+
+    const summary = activeAttribute.summary
+    const groupChartOption: echarts.EChartsOption = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 62, right: 24, top: 50, bottom: 86 },
+      xAxis: {
+        type: 'category',
+        data: activeAttribute.groups.map((group) => group.value),
+        axisLabel: { color: '#71809a', rotate: 24, interval: 0, hideOverlap: true },
+        axisLine: { lineStyle: { color: '#263650' } },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 1,
+        axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' },
+        splitLine: { lineStyle: { color: '#1b293d' } },
+      },
+      series: [
+        { name: 'Favorable selection', type: 'bar', data: activeAttribute.groups.map((group) => group.favorable_selection_rate), barMaxWidth: 34 },
+        { name: 'Default rate', type: 'bar', data: activeAttribute.groups.map((group) => group.default_rate), barMaxWidth: 34 },
+        { name: 'High-risk rate', type: 'bar', data: activeAttribute.groups.map((group) => group.high_risk_rate), barMaxWidth: 34 },
+      ],
+    }
+
+    const parityCards = [
+      ['Demographic parity gap', summary.demographic_parity_gap, 'Max − min favorable-selection rate'],
+      ['Disparate impact ratio', summary.disparate_impact_ratio, 'Min / max favorable-selection rate'],
+      ['Equalized odds gap', summary.equalized_odds_gap, 'Max of TPR and FPR gaps'],
+      ['Bad-detection TPR gap', summary.bad_detection_tpr_gap, 'Difference in default capture'],
+      ['Bad-detection FPR gap', summary.bad_detection_fpr_gap, 'Difference in false high-risk flags'],
+      ['AUC gap', summary.auc_gap, 'Max − min group AUC'],
+      ...(result.prediction_type === 'pd' ? [['Calibration gap spread', summary.calibration_gap_spread, 'Spread in |DR − PD|'] as [string, number | null, string]] : []),
+    ] as [string, number | null, string][]
+
+    return (
+      <section className="page-content fairness-page">
+        <div className="analysis-page-header">
+          <div><p className="eyebrow">Fairness</p><h1>Fairness diagnostics</h1><p>Threshold-free performance diagnostics plus parity metrics at a clearly defined portfolio-wide operating point.</p></div>
+          <div className="eda-header-actions"><div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div><button className="primary-button" onClick={runFairness}>Run again</button></div>
+        </div>
+
+        <section className="panel fairness-controls">
+          <div className="eda-control-row">
+            <div>
+              <h2>Sensitive attribute</h2>
+              <p>{activeAttribute.mode === 'quantiles' ? 'Continuous / ordinal variable split into three approximately equal-frequency groups.' : 'Categorical groups are evaluated directly.'}</p>
+            </div>
+            <label className="form-field compact-field"><span>Attribute</span><select value={activeAttribute.column} onChange={(event) => setFairnessAttribute(event.target.value)}>{result.attributes.map((attribute) => <option key={attribute.column} value={attribute.column}>{attribute.column}</option>)}</select></label>
+            <label className="form-field compact-field"><span>High-risk share</span><select value={fairnessHighRiskShare} onChange={(event) => setFairnessHighRiskShare(Number(event.target.value))}><option value={0.10}>Top 10%</option><option value={0.20}>Top 20%</option><option value={0.30}>Top 30%</option></select><small>Run again to apply</small></label>
+          </div>
+          <div className="fairness-threshold-note">Current run: top {(result.high_risk_share * 100).toFixed(0)}% riskiest observations are classified as high risk. Internal normalized risk threshold: {formatMetric(result.risk_threshold)}.</div>
+        </section>
+
+        <div className="fairness-summary-grid">
+          {parityCards.map(([label, value, note]) => <article className="metric-card" key={label}><span>{label}</span><strong>{value === null ? '—' : label.includes('ratio') || label.includes('AUC') ? value.toFixed(3) : formatPercent(value)}</strong><small className="neutral">{note}</small></article>)}
+        </div>
+
+        <section className="panel fairness-chart-section">
+          <div className="panel-title"><div><h2>{activeAttribute.column} · group comparison</h2><p className="eda-muted">{activeAttribute.mode === 'quantiles' ? activeAttribute.bins.join(' · ') : `${activeAttribute.groups.length} observed groups`}</p></div></div>
+          <EChart option={groupChartOption} height={410} />
+        </section>
+
+        <section className="panel fairness-table-section">
+          <div className="panel-title"><div><h2>Group metrics</h2><p className="eda-muted">Metrics are calculated independently for each sensitive group. Small groups should be interpreted cautiously.</p></div></div>
+          <div className="table-wrap">
+            <table className="fairness-table">
+              <thead><tr><th>Group</th><th>N</th><th>Defaults</th><th>DR</th><th>{result.prediction_type === 'pd' ? 'Mean PD' : 'Mean prediction'}</th><th>AUC</th><th>KS</th><th>Favorable selection</th><th>High-risk rate</th><th>TPR</th><th>FPR</th>{result.prediction_type === 'pd' && <><th>O/E</th><th>DR − PD</th></>}</tr></thead>
+              <tbody>{activeAttribute.groups.map((group) => (
+                <tr key={group.value}>
+                  <td><strong>{group.value}</strong></td>
+                  <td>{group.observations.toLocaleString()}</td>
+                  <td>{group.defaults.toLocaleString()}</td>
+                  <td>{formatPercent(group.default_rate)}</td>
+                  <td>{result.prediction_type === 'pd' ? formatPercent(group.mean_pd ?? 0) : formatMetric(group.mean_prediction)}</td>
+                  <td>{formatMetric(group.auc)}</td>
+                  <td>{formatMetric(group.ks)}</td>
+                  <td>{formatPercent(group.favorable_selection_rate)}</td>
+                  <td>{formatPercent(group.high_risk_rate)}</td>
+                  <td>{group.tpr_bad_detection === null ? '—' : formatPercent(group.tpr_bad_detection)}</td>
+                  <td>{group.fpr_bad_detection === null ? '—' : formatPercent(group.fpr_bad_detection)}</td>
+                  {result.prediction_type === 'pd' && <><td>{formatMetric(group.oe_ratio)}</td><td>{group.calibration_gap === null ? '—' : (group.calibration_gap >= 0 ? '+' : '') + (group.calibration_gap * 100).toFixed(1) + ' pp'}</td></>}
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel fairness-method-note">
+          <div><h2>How RiskLab interprets this view</h2><p>Demographic parity compares the favorable low-risk classification rate. Equalized-odds diagnostics compare default-detection TPR and FPR. For PD models, calibration is also compared by sensitive group.</p></div>
+          <ul>{result.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+        </section>
+
+        {(result.excluded.missing_prediction > 0 || result.excluded.missing_target > 0 || activeAttribute.excluded_missing_sensitive > 0) && <div className="eda-sample-note">Excluded: {result.excluded.missing_prediction.toLocaleString()} missing prediction, {result.excluded.missing_target.toLocaleString()} missing target, {activeAttribute.excluded_missing_sensitive.toLocaleString()} missing {activeAttribute.column}.</div>}
+        <div className="eda-footer-meta">Last run: {lastRun.Fairness ?? '—'}</div>
+      </section>
+    )
+  }
+
   const renderFindings = () => {
     if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
 
