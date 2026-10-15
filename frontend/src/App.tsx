@@ -1554,6 +1554,31 @@ function App() {
     }
   }
 
+  const runFairness = async () => {
+    if (!preview || !validationReady || validationConfig.sensitiveColumns.length === 0) return
+    setAnalysisStatus((current) => ({ ...current, Fairness: 'running' }))
+    setFairnessError(null)
+
+    const formData = new FormData()
+    formData.append('dataset_id', preview.dataset_id)
+    formData.append('config', JSON.stringify(validationConfig))
+    formData.append('high_risk_share', String(fairnessHighRiskShare))
+
+    try {
+      const response = await fetch('http://localhost:8000/fairness/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as FairnessResult
+      setFairnessResult(result)
+      setFairnessAttribute((current) => current || result.attributes[0]?.column || '')
+      setAnalysisStatus((current) => ({ ...current, Fairness: 'ready' }))
+      setLastRun((current) => ({ ...current, Fairness: new Date().toLocaleString() }))
+    } catch (err) {
+      setFairnessError(err instanceof Error ? err.message : 'Fairness analysis failed.')
+      setAnalysisStatus((current) => ({ ...current, Fairness: 'failed' }))
+    }
+  }
+
   const makeReportHtml = (results?: {
     eda?: EdaResult | null
     discrimination?: DiscriminationResult | null
