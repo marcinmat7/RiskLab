@@ -2579,7 +2579,7 @@ function App() {
     const overviewFindings = validationReady ? collectFindings() : []
     const redFindings = overviewFindings.filter((finding) => finding.severity === 'red').length
     const yellowFindings = overviewFindings.filter((finding) => finding.severity === 'yellow').length
-    const availableAnalyses = ['EDA', 'Discrimination', ...(validationConfig.predictionType === 'pd' ? ['Calibration'] : []), 'Stability'] as AnalysisSection[]
+    const availableAnalyses = ['EDA', 'Discrimination', ...(validationConfig.predictionType === 'pd' ? ['Calibration'] : []), 'Stability', ...(validationConfig.sensitiveColumns.length ? ['Fairness'] : [])] as AnalysisSection[]
     const completedAnalyses = availableAnalyses.filter((section) => analysisStatus[section] === 'ready').length
 
     return (
@@ -2612,7 +2612,7 @@ function App() {
         {fullRunStep && <div className={`overview-run-message ${fullRunStatus}`}><span className={`analysis-status-pill ${fullRunStatus === 'ready' ? 'ready' : fullRunStatus === 'failed' ? 'failed' : 'running'}`}><span />{fullRunStatus === 'ready' ? 'Complete' : fullRunStatus === 'failed' ? 'Failed' : 'Running'}</span><strong>{fullRunStep}</strong></div>}
 
         <div className="overview-summary-grid">
-          <article className="metric-card"><span>Analyses completed</span><strong>{completedAnalyses}/{availableAnalyses.length}</strong><small className="neutral">EDA · discrimination · calibration · stability</small></article>
+          <article className="metric-card"><span>Analyses completed</span><strong>{completedAnalyses}/{availableAnalyses.length}</strong><small className="neutral">EDA · discrimination · calibration · stability{validationConfig.sensitiveColumns.length ? ' · fairness' : ''}</small></article>
           <article className="metric-card"><span>AUC</span><strong>{formatMetric(discriminationResult?.overall.auc)}</strong><small className="neutral">{discriminationResult ? `Gini ${formatMetric(discriminationResult.overall.gini)}` : 'Run full validation'}</small></article>
           <article className="metric-card"><span>Calibration O/E</span><strong>{validationConfig.predictionType === 'pd' ? formatMetric(calibrationResult?.overall.oe_ratio) : 'N/A'}</strong><small className="neutral">{calibrationResult ? `DR ${formatPercent(calibrationResult.overall.default_rate)} · PD ${formatPercent(calibrationResult.overall.mean_pd)}` : 'Probability models only'}</small></article>
           <article className="metric-card"><span>Findings</span><strong>{overviewFindings.length}</strong><small><span className="overview-finding-red">{redFindings} red</span> · <span className="overview-finding-yellow">{yellowFindings} yellow</span></small></article>
@@ -2623,8 +2623,8 @@ function App() {
         <section className="panel overview-module-status">
           <div className="panel-title"><div><h2>Validation package</h2><p className="eda-muted">Each module remains available independently, but Overview can execute the complete package.</p></div></div>
           <div className="overview-module-grid">
-            {(['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports'] as AnalysisSection[]).map((section) => {
-              const unavailable = section === 'Calibration' && validationConfig.predictionType === 'score'
+            {(['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Fairness', 'Findings', 'Reports'] as AnalysisSection[]).map((section) => {
+              const unavailable = (section === 'Calibration' && validationConfig.predictionType === 'score') || (section === 'Fairness' && validationConfig.sensitiveColumns.length === 0)
               const status = unavailable ? 'unavailable' : analysisStatus[section]
               return <button key={section} onClick={() => setActiveSection(section)}><span className={`nav-analysis-status ${status}`} /><strong>{section}</strong><small>{statusLabel(status)}</small></button>
             })}
@@ -4175,10 +4175,11 @@ function App() {
         {activeSection === 'Discrimination' && renderDiscrimination()}
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
+        {activeSection === 'Fairness' && renderFairness()}
         {activeSection === 'Findings' && renderFindings()}
         {activeSection === 'Reports' && renderReports()}
         {activeSection === 'Methodology' && renderMethodology()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Reports' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Fairness' && activeSection !== 'Findings' && activeSection !== 'Reports' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )
