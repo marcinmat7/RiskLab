@@ -27,7 +27,7 @@ type DatasetPreview = {
 }
 
 type UploadStatus = 'idle' | 'selected' | 'uploading' | 'ready' | 'error'
-type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Findings' | 'Reports' | 'Methodology'
+type Section = 'Overview' | 'Data' | 'Validation' | 'EDA' | 'Discrimination' | 'Calibration' | 'Stability' | 'Fairness' | 'Findings' | 'Reports' | 'Methodology'
 type AnalysisSection = Exclude<Section, 'Overview' | 'Data' | 'Methodology'>
 type AnalysisStatus = 'not-run' | 'running' | 'ready' | 'failed' | 'blocked' | 'unavailable'
 type PredictionType = 'pd' | 'score'
@@ -427,8 +427,61 @@ type StabilityResult = {
   }
 }
 
-const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports', 'Methodology']
-const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports']
+
+type FairnessGroup = {
+  value: string
+  observations: number
+  defaults: number
+  default_rate: number
+  mean_prediction: number
+  mean_risk_score: number
+  auc: number | null
+  ks: number | null
+  high_risk_rate: number
+  favorable_selection_rate: number
+  tpr_bad_detection: number | null
+  fpr_bad_detection: number | null
+  tnr_good_acceptance: number | null
+  fnr_bad_missed: number | null
+  ppv_default_given_high_risk: number | null
+  npv_non_default_given_low_risk: number | null
+  mean_pd: number | null
+  calibration_gap: number | null
+  oe_ratio: number | null
+}
+
+type FairnessResult = {
+  high_risk_share: number
+  risk_threshold: number
+  risk_direction: 'higher-is-riskier'
+  prediction_type: PredictionType
+  attributes: {
+    column: string
+    semantic_type: SemanticType
+    mode: 'quantiles' | 'categories'
+    bins: string[]
+    edges: number[]
+    excluded_missing_sensitive: number
+    groups: FairnessGroup[]
+    summary: {
+      demographic_parity_gap: number | null
+      disparate_impact_ratio: number | null
+      bad_detection_tpr_gap: number | null
+      bad_detection_fpr_gap: number | null
+      equalized_odds_gap: number | null
+      auc_gap: number | null
+      calibration_gap_spread: number | null
+    }
+  }[]
+  excluded: {
+    missing_prediction: number
+    missing_target: number
+  }
+  notes: string[]
+}
+
+const navItems: Section[] = ['Overview', 'Data', 'Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Fairness', 'Findings', 'Reports', 'Methodology']
+const analysisSections: AnalysisSection[] = ['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Fairness', 'Findings', 'Reports']
 
 type MethodologyEntry = {
   id: string
@@ -651,6 +704,7 @@ const analysisCopy: Record<AnalysisSection, { title: string; description: string
   Discrimination: { title: 'Discrimination', description: 'Evaluate ranking performance of the submitted model.', action: 'Run discrimination' },
   Calibration: { title: 'Calibration', description: 'Evaluate how predicted probabilities align with observed default rates.', action: 'Run calibration' },
   Stability: { title: 'Stability', description: 'Assess population and model stability over time or across samples.', action: 'Run stability analysis' },
+  Fairness: { title: 'Fairness', description: 'Compare model behaviour across configured sensitive attributes.', action: 'Run fairness analysis' },
   Findings: { title: 'Findings', description: 'Generate structured findings from completed validation analyses.', action: 'Generate findings' },
   Reports: { title: 'Reports', description: 'Generate a validation report from the analyses currently available.', action: 'Generate report' },
 }
@@ -680,6 +734,7 @@ const initialStatuses = (): Record<AnalysisSection, AnalysisStatus> => ({
   Discrimination: 'blocked',
   Calibration: 'blocked',
   Stability: 'blocked',
+  Fairness: 'blocked',
   Findings: 'blocked',
   Reports: 'blocked',
 })
@@ -947,6 +1002,10 @@ function App() {
   const [stabilityComparison, setStabilityComparison] = useState('')
   const [stabilityVariable, setStabilityVariable] = useState('')
   const [stabilityGranularity, setStabilityGranularity] = useState<TimeGranularity>('monthly')
+  const [fairnessResult, setFairnessResult] = useState<FairnessResult | null>(null)
+  const [fairnessError, setFairnessError] = useState<string | null>(null)
+  const [fairnessAttribute, setFairnessAttribute] = useState('')
+  const [fairnessHighRiskShare, setFairnessHighRiskShare] = useState(0.20)
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
   const [validationParsingWarnings, setValidationParsingWarnings] = useState<ValidationParsingWarning[]>([])
   const [validationRunError, setValidationRunError] = useState<string | null>(null)
@@ -1017,6 +1076,10 @@ function App() {
     setStabilityComparison('')
     setStabilityVariable('')
     setStabilityGranularity('monthly')
+    setFairnessResult(null)
+    setFairnessError(null)
+    setFairnessAttribute('')
+    setFairnessHighRiskShare(0.20)
     setValidationConfigMessage(null)
     setValidationParsingWarnings([])
     setValidationRunError(null)
@@ -1045,6 +1108,9 @@ function App() {
     setStabilityReference('')
     setStabilityComparison('')
     setStabilityVariable('')
+    setFairnessResult(null)
+    setFairnessError(null)
+    setFairnessAttribute('')
     setEdaTab('Overview')
     setDistributionDetailColumn('')
     setPopulationColumn('')
@@ -1288,6 +1354,7 @@ function App() {
     if (section === 'Validation' && !requiredConfigReady) return
     if (section !== 'Validation' && !validationReady) return
     if (section === 'Calibration' && validationConfig.predictionType === 'score') return
+    if (section === 'Fairness' && validationConfig.sensitiveColumns.length === 0) return
 
     setAnalysisStatus((current) => ({ ...current, [section]: 'running' }))
     window.setTimeout(() => {
@@ -1295,7 +1362,13 @@ function App() {
         const next = { ...current, [section]: 'ready' as AnalysisStatus }
         if (section === 'Validation') {
           analysisSections.forEach((item) => {
-            if (item !== 'Validation') next[item] = item === 'Calibration' && validationConfig.predictionType === 'score' ? 'unavailable' : 'not-run'
+            if (item !== 'Validation') {
+              next[item] = item === 'Calibration' && validationConfig.predictionType === 'score'
+                ? 'unavailable'
+                : item === 'Fairness' && validationConfig.sensitiveColumns.length === 0
+                  ? 'unavailable'
+                  : 'not-run'
+            }
           })
         }
         return next
@@ -1337,7 +1410,9 @@ function App() {
           if (item !== 'Validation') {
             next[item] = item === 'Calibration' && validationConfig.predictionType === 'score'
               ? 'unavailable'
-              : 'not-run'
+              : item === 'Fairness' && validationConfig.sensitiveColumns.length === 0
+                ? 'unavailable'
+                : 'not-run'
           }
         })
         return next
@@ -1479,11 +1554,37 @@ function App() {
     }
   }
 
+  const runFairness = async () => {
+    if (!preview || !validationReady || validationConfig.sensitiveColumns.length === 0) return
+    setAnalysisStatus((current) => ({ ...current, Fairness: 'running' }))
+    setFairnessError(null)
+
+    const formData = new FormData()
+    formData.append('dataset_id', preview.dataset_id)
+    formData.append('config', JSON.stringify(validationConfig))
+    formData.append('high_risk_share', String(fairnessHighRiskShare))
+
+    try {
+      const response = await fetch('http://localhost:8000/fairness/run', { method: 'POST', body: formData })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`)
+      const result = body as FairnessResult
+      setFairnessResult(result)
+      setFairnessAttribute((current) => current || result.attributes[0]?.column || '')
+      setAnalysisStatus((current) => ({ ...current, Fairness: 'ready' }))
+      setLastRun((current) => ({ ...current, Fairness: new Date().toLocaleString() }))
+    } catch (err) {
+      setFairnessError(err instanceof Error ? err.message : 'Fairness analysis failed.')
+      setAnalysisStatus((current) => ({ ...current, Fairness: 'failed' }))
+    }
+  }
+
   const makeReportHtml = (results?: {
     eda?: EdaResult | null
     discrimination?: DiscriminationResult | null
     calibration?: CalibrationResult | null
     stability?: StabilityResult | null
+    fairness?: FairnessResult | null
     validationWarnings?: ValidationParsingWarning[]
   }) => {
     if (!preview) return { html: '', generatedAt: '' }
@@ -1491,6 +1592,7 @@ function App() {
     const currentDiscrimination = results?.discrimination === undefined ? discriminationResult : results.discrimination
     const currentCalibration = results?.calibration === undefined ? calibrationResult : results.calibration
     const currentStability = results?.stability === undefined ? stabilityResult : results.stability
+    const currentFairness = results?.fairness === undefined ? fairnessResult : results.fairness
     const findings = collectFindings({
       validationWarnings: results?.validationWarnings,
       eda: currentEda,
@@ -1556,6 +1658,22 @@ function App() {
         })),
       } : null,
       stability: [...psiByVariable.entries()].map(([variable, psi]) => ({ variable, psi })),
+      fairness: (currentFairness?.attributes ?? []).map((attribute) => ({
+        attribute: attribute.column,
+        mode: attribute.mode,
+        demographicParityGap: attribute.summary.demographic_parity_gap,
+        disparateImpactRatio: attribute.summary.disparate_impact_ratio,
+        equalizedOddsGap: attribute.summary.equalized_odds_gap,
+        aucGap: attribute.summary.auc_gap,
+        groups: attribute.groups.map((group) => ({
+          value: group.value,
+          observations: group.observations,
+          defaultRate: group.default_rate,
+          favorableSelectionRate: group.favorable_selection_rate,
+          auc: group.auc,
+          calibrationGap: group.calibration_gap,
+        })),
+      })),
       dataQuality: currentEda ? {
         missingRate: currentEda.overview.missing_rate,
         duplicateRows: currentEda.overview.duplicate_rows,
@@ -1609,23 +1727,27 @@ function App() {
     }
 
     try {
-      setFullRunStep('Running EDA, discrimination, calibration and stability…')
+      setFullRunStep(validationConfig.sensitiveColumns.length ? 'Running EDA, discrimination, calibration, stability and fairness…' : 'Running EDA, discrimination, calibration and stability…')
       setRunning('EDA')
       setRunning('Discrimination')
       setRunning('Stability')
       if (validationConfig.predictionType === 'pd') setRunning('Calibration')
+      if (validationConfig.sensitiveColumns.length) setRunning('Fairness')
 
-      const [eda, discrimination, calibration, stability] = await Promise.all([
+      const [eda, discrimination, calibration, stability, fairness] = await Promise.all([
         post<EdaResult>('/eda/run', { time_granularity: timeGranularity }),
         post<DiscriminationResult>('/discrimination/run', { time_granularity: discriminationGranularity }),
         validationConfig.predictionType === 'pd' ? post<CalibrationResult>('/calibration/run') : Promise.resolve(null),
         post<StabilityResult>('/stability/run'),
+        validationConfig.sensitiveColumns.length ? post<FairnessResult>('/fairness/run', { high_risk_share: String(fairnessHighRiskShare) }) : Promise.resolve(null),
       ])
 
       setEdaResult(eda)
       setDiscriminationResult(discrimination)
       setCalibrationResult(calibration)
       setStabilityResult(stability)
+      setFairnessResult(fairness)
+      setFairnessAttribute(fairness?.attributes[0]?.column ?? '')
 
       setEdaTimeVariable(eda.profiles.find((profile) => ['continuous', 'ordinal'].includes(profile.semantic_type))?.column ?? '')
       setEdaTimeMissingColumn(eda.profiles.find((profile) => profile.missing_count > 0)?.column ?? eda.profiles[0]?.column ?? '')
@@ -1653,6 +1775,7 @@ function App() {
         discrimination,
         calibration,
         stability,
+        fairness,
         validationWarnings: validationParsingWarnings,
       })
       setReportHtml(generated.html)
@@ -1664,6 +1787,7 @@ function App() {
         Discrimination: 'ready',
         Calibration: validationConfig.predictionType === 'pd' ? 'ready' : 'unavailable',
         Stability: 'ready',
+        Fairness: validationConfig.sensitiveColumns.length ? 'ready' : 'unavailable',
         Findings: 'ready',
         Reports: 'ready',
       }))
@@ -1673,6 +1797,7 @@ function App() {
         Discrimination: startedAt,
         Calibration: validationConfig.predictionType === 'pd' ? startedAt : current.Calibration,
         Stability: startedAt,
+        Fairness: validationConfig.sensitiveColumns.length ? startedAt : current.Fairness,
         Findings: generated.generatedAt,
         Reports: generated.generatedAt,
       }))
@@ -1689,6 +1814,7 @@ function App() {
         Discrimination: current.Discrimination === 'running' ? 'failed' : current.Discrimination,
         Calibration: current.Calibration === 'running' ? 'failed' : current.Calibration,
         Stability: current.Stability === 'running' ? 'failed' : current.Stability,
+        Fairness: current.Fairness === 'running' ? 'failed' : current.Fairness,
       }))
     }
   }
@@ -1981,6 +2107,178 @@ function App() {
     return findings
   }
 
+  const renderFairness = () => {
+    if (!preview) return <EmptyAnalysisState section="Fairness" onOpenData={() => setActiveSection('Data')} />
+
+    const status = analysisStatus.Fairness
+    if (!validationReady) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness</h1><p>Compare model behaviour across attributes configured as sensitive in Validation.</p></div>
+            <div className="analysis-status-pill blocked"><span />Blocked</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>◎</span></div>
+            <h2>Complete validation first</h2>
+            <p>Fairness uses the model output, target and Sensitive attributes configured in Validation.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Open validation setup</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (validationConfig.sensitiveColumns.length === 0) {
+      return (
+        <section className="page-content analysis-module-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness</h1><p>Compare model behaviour across configured sensitive groups.</p></div>
+            <div className="analysis-status-pill unavailable"><span />Not available</div>
+          </div>
+          <section className="panel analysis-run-card">
+            <div className="analysis-run-icon" aria-hidden="true"><span>◎</span></div>
+            <h2>No sensitive attributes configured</h2>
+            <p>Select at least one Sensitive attribute in Validation. Continuous and ordinal attributes such as age are automatically split into three approximately equal-frequency groups.</p>
+            <button className="secondary-button" onClick={() => setActiveSection('Validation')}>Configure sensitive attributes</button>
+          </section>
+        </section>
+      )
+    }
+
+    if (!fairnessResult) {
+      return (
+        <section className="page-content fairness-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness diagnostics</h1><p>Group-level performance, calibration and classification parity across sensitive attributes.</p></div>
+            <div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div>
+          </div>
+          {fairnessError && <div className="message error-message">{fairnessError}</div>}
+          <section className="panel fairness-run-card">
+            <div>
+              <h2>Ready to compare sensitive groups</h2>
+              <p>RiskLab evaluates {validationConfig.sensitiveColumns.join(', ')}. Continuous / ordinal attributes are split into three equal-frequency groups; categorical attributes use their observed categories.</p>
+              <div className="fairness-operating-note">Threshold-dependent metrics use a diagnostic operating point based on the riskiest share of the whole portfolio. This is not an approval threshold and is not a legal compliance decision.</div>
+            </div>
+            <label className="form-field compact-field"><span>High-risk share</span><select value={fairnessHighRiskShare} onChange={(event) => setFairnessHighRiskShare(Number(event.target.value))}><option value={0.10}>Top 10%</option><option value={0.20}>Top 20%</option><option value={0.30}>Top 30%</option></select><small>Used for parity metrics</small></label>
+            <button className="primary-button" disabled={status === 'running'} onClick={runFairness}>{status === 'running' ? 'Running…' : 'Run fairness analysis'}</button>
+          </section>
+        </section>
+      )
+    }
+
+    const result = fairnessResult
+    const activeAttribute = result.attributes.find((attribute) => attribute.column === fairnessAttribute) ?? result.attributes[0]
+
+    if (!activeAttribute) {
+      return (
+        <section className="page-content fairness-page">
+          <div className="analysis-page-header">
+            <div><p className="eyebrow">Fairness</p><h1>Fairness diagnostics</h1><p>No usable sensitive groups were found.</p></div>
+          </div>
+        </section>
+      )
+    }
+
+    const summary = activeAttribute.summary
+    const groupChartOption: echarts.EChartsOption = {
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { top: 0, textStyle: { color: '#8b9aaf' } },
+      grid: { left: 62, right: 24, top: 50, bottom: 86 },
+      xAxis: {
+        type: 'category',
+        data: activeAttribute.groups.map((group) => group.value),
+        axisLabel: { color: '#71809a', rotate: 24, interval: 0, hideOverlap: true },
+        axisLine: { lineStyle: { color: '#263650' } },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 1,
+        axisLabel: { color: '#71809a', formatter: (value: string | number) => Math.round(Number(value) * 100) + '%' },
+        splitLine: { lineStyle: { color: '#1b293d' } },
+      },
+      series: [
+        { name: 'Favorable selection', type: 'bar', data: activeAttribute.groups.map((group) => group.favorable_selection_rate), barMaxWidth: 34 },
+        { name: 'Default rate', type: 'bar', data: activeAttribute.groups.map((group) => group.default_rate), barMaxWidth: 34 },
+        { name: 'High-risk rate', type: 'bar', data: activeAttribute.groups.map((group) => group.high_risk_rate), barMaxWidth: 34 },
+      ],
+    }
+
+    const parityCards = [
+      ['Demographic parity gap', summary.demographic_parity_gap, 'Max − min favorable-selection rate'],
+      ['Disparate impact ratio', summary.disparate_impact_ratio, 'Min / max favorable-selection rate'],
+      ['Equalized odds gap', summary.equalized_odds_gap, 'Max of TPR and FPR gaps'],
+      ['Bad-detection TPR gap', summary.bad_detection_tpr_gap, 'Difference in default capture'],
+      ['Bad-detection FPR gap', summary.bad_detection_fpr_gap, 'Difference in false high-risk flags'],
+      ['AUC gap', summary.auc_gap, 'Max − min group AUC'],
+      ...(result.prediction_type === 'pd' ? [['Calibration gap spread', summary.calibration_gap_spread, 'Spread in |DR − PD|'] as [string, number | null, string]] : []),
+    ] as [string, number | null, string][]
+
+    return (
+      <section className="page-content fairness-page">
+        <div className="analysis-page-header">
+          <div><p className="eyebrow">Fairness</p><h1>Fairness diagnostics</h1><p>Threshold-free performance diagnostics plus parity metrics at a clearly defined portfolio-wide operating point.</p></div>
+          <div className="eda-header-actions"><div className={`analysis-status-pill ${status}`}><span />{statusLabel(status)}</div><button className="primary-button" onClick={runFairness}>Run again</button></div>
+        </div>
+
+        <section className="panel fairness-controls">
+          <div className="eda-control-row">
+            <div>
+              <h2>Sensitive attribute</h2>
+              <p>{activeAttribute.mode === 'quantiles' ? 'Continuous / ordinal variable split into three approximately equal-frequency groups.' : 'Categorical groups are evaluated directly.'}</p>
+            </div>
+            <label className="form-field compact-field"><span>Attribute</span><select value={activeAttribute.column} onChange={(event) => setFairnessAttribute(event.target.value)}>{result.attributes.map((attribute) => <option key={attribute.column} value={attribute.column}>{attribute.column}</option>)}</select></label>
+            <label className="form-field compact-field"><span>High-risk share</span><select value={fairnessHighRiskShare} onChange={(event) => setFairnessHighRiskShare(Number(event.target.value))}><option value={0.10}>Top 10%</option><option value={0.20}>Top 20%</option><option value={0.30}>Top 30%</option></select><small>Run again to apply</small></label>
+          </div>
+          <div className="fairness-threshold-note">Current run: top {(result.high_risk_share * 100).toFixed(0)}% riskiest observations are classified as high risk. Internal normalized risk threshold: {formatMetric(result.risk_threshold)}.</div>
+        </section>
+
+        <div className="fairness-summary-grid">
+          {parityCards.map(([label, value, note]) => <article className="metric-card" key={label}><span>{label}</span><strong>{value === null ? '—' : label.includes('ratio') || label.includes('AUC') ? value.toFixed(3) : formatPercent(value)}</strong><small className="neutral">{note}</small></article>)}
+        </div>
+
+        <section className="panel fairness-chart-section">
+          <div className="panel-title"><div><h2>{activeAttribute.column} · group comparison</h2><p className="eda-muted">{activeAttribute.mode === 'quantiles' ? activeAttribute.bins.join(' · ') : `${activeAttribute.groups.length} observed groups`}</p></div></div>
+          <EChart option={groupChartOption} height={410} />
+        </section>
+
+        <section className="panel fairness-table-section">
+          <div className="panel-title"><div><h2>Group metrics</h2><p className="eda-muted">Metrics are calculated independently for each sensitive group. Small groups should be interpreted cautiously.</p></div></div>
+          <div className="table-wrap">
+            <table className="fairness-table">
+              <thead><tr><th>Group</th><th>N</th><th>Defaults</th><th>DR</th><th>{result.prediction_type === 'pd' ? 'Mean PD' : 'Mean prediction'}</th><th>AUC</th><th>KS</th><th>Favorable selection</th><th>High-risk rate</th><th>TPR</th><th>FPR</th>{result.prediction_type === 'pd' && <><th>O/E</th><th>DR − PD</th></>}</tr></thead>
+              <tbody>{activeAttribute.groups.map((group) => (
+                <tr key={group.value}>
+                  <td><strong>{group.value}</strong></td>
+                  <td>{group.observations.toLocaleString()}</td>
+                  <td>{group.defaults.toLocaleString()}</td>
+                  <td>{formatPercent(group.default_rate)}</td>
+                  <td>{result.prediction_type === 'pd' ? formatPercent(group.mean_pd ?? 0) : formatMetric(group.mean_prediction)}</td>
+                  <td>{formatMetric(group.auc)}</td>
+                  <td>{formatMetric(group.ks)}</td>
+                  <td>{formatPercent(group.favorable_selection_rate)}</td>
+                  <td>{formatPercent(group.high_risk_rate)}</td>
+                  <td>{group.tpr_bad_detection === null ? '—' : formatPercent(group.tpr_bad_detection)}</td>
+                  <td>{group.fpr_bad_detection === null ? '—' : formatPercent(group.fpr_bad_detection)}</td>
+                  {result.prediction_type === 'pd' && <><td>{formatMetric(group.oe_ratio)}</td><td>{group.calibration_gap === null ? '—' : (group.calibration_gap >= 0 ? '+' : '') + (group.calibration_gap * 100).toFixed(1) + ' pp'}</td></>}
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel fairness-method-note">
+          <div><h2>How RiskLab interprets this view</h2><p>Demographic parity compares the favorable low-risk classification rate. Equalized-odds diagnostics compare default-detection TPR and FPR. For PD models, calibration is also compared by sensitive group.</p></div>
+          <ul>{result.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+        </section>
+
+        {(result.excluded.missing_prediction > 0 || result.excluded.missing_target > 0 || activeAttribute.excluded_missing_sensitive > 0) && <div className="eda-sample-note">Excluded: {result.excluded.missing_prediction.toLocaleString()} missing prediction, {result.excluded.missing_target.toLocaleString()} missing target, {activeAttribute.excluded_missing_sensitive.toLocaleString()} missing {activeAttribute.column}.</div>}
+        <div className="eda-footer-meta">Last run: {lastRun.Fairness ?? '—'}</div>
+      </section>
+    )
+  }
+
   const renderFindings = () => {
     if (!preview) return <EmptyAnalysisState section="Findings" onOpenData={() => setActiveSection('Data')} />
 
@@ -2109,6 +2407,7 @@ function App() {
                 <div><strong>Findings</strong><span>Description, evidence, severity and policy criteria</span></div>
                 <div><strong>Configuration</strong><span>Dataset metadata, model mapping, time cut-off and segment roles</span></div>
                 <div><strong>Finding Policy</strong><span>Policy ID, version, schema and global sample requirements</span></div>
+                <div><strong>Fairness</strong><span>Sensitive-group parity and performance summary when configured</span></div>
                 <div><strong>Offline portability</strong><span>One HTML file with no external assets</span></div>
               </div>
             </section>
@@ -2307,7 +2606,7 @@ function App() {
     const overviewFindings = validationReady ? collectFindings() : []
     const redFindings = overviewFindings.filter((finding) => finding.severity === 'red').length
     const yellowFindings = overviewFindings.filter((finding) => finding.severity === 'yellow').length
-    const availableAnalyses = ['EDA', 'Discrimination', ...(validationConfig.predictionType === 'pd' ? ['Calibration'] : []), 'Stability'] as AnalysisSection[]
+    const availableAnalyses = ['EDA', 'Discrimination', ...(validationConfig.predictionType === 'pd' ? ['Calibration'] : []), 'Stability', ...(validationConfig.sensitiveColumns.length ? ['Fairness'] : [])] as AnalysisSection[]
     const completedAnalyses = availableAnalyses.filter((section) => analysisStatus[section] === 'ready').length
 
     return (
@@ -2340,7 +2639,7 @@ function App() {
         {fullRunStep && <div className={`overview-run-message ${fullRunStatus}`}><span className={`analysis-status-pill ${fullRunStatus === 'ready' ? 'ready' : fullRunStatus === 'failed' ? 'failed' : 'running'}`}><span />{fullRunStatus === 'ready' ? 'Complete' : fullRunStatus === 'failed' ? 'Failed' : 'Running'}</span><strong>{fullRunStep}</strong></div>}
 
         <div className="overview-summary-grid">
-          <article className="metric-card"><span>Analyses completed</span><strong>{completedAnalyses}/{availableAnalyses.length}</strong><small className="neutral">EDA · discrimination · calibration · stability</small></article>
+          <article className="metric-card"><span>Analyses completed</span><strong>{completedAnalyses}/{availableAnalyses.length}</strong><small className="neutral">EDA · discrimination · calibration · stability{validationConfig.sensitiveColumns.length ? ' · fairness' : ''}</small></article>
           <article className="metric-card"><span>AUC</span><strong>{formatMetric(discriminationResult?.overall.auc)}</strong><small className="neutral">{discriminationResult ? `Gini ${formatMetric(discriminationResult.overall.gini)}` : 'Run full validation'}</small></article>
           <article className="metric-card"><span>Calibration O/E</span><strong>{validationConfig.predictionType === 'pd' ? formatMetric(calibrationResult?.overall.oe_ratio) : 'N/A'}</strong><small className="neutral">{calibrationResult ? `DR ${formatPercent(calibrationResult.overall.default_rate)} · PD ${formatPercent(calibrationResult.overall.mean_pd)}` : 'Probability models only'}</small></article>
           <article className="metric-card"><span>Findings</span><strong>{overviewFindings.length}</strong><small><span className="overview-finding-red">{redFindings} red</span> · <span className="overview-finding-yellow">{yellowFindings} yellow</span></small></article>
@@ -2351,8 +2650,8 @@ function App() {
         <section className="panel overview-module-status">
           <div className="panel-title"><div><h2>Validation package</h2><p className="eda-muted">Each module remains available independently, but Overview can execute the complete package.</p></div></div>
           <div className="overview-module-grid">
-            {(['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Findings', 'Reports'] as AnalysisSection[]).map((section) => {
-              const unavailable = section === 'Calibration' && validationConfig.predictionType === 'score'
+            {(['Validation', 'EDA', 'Discrimination', 'Calibration', 'Stability', 'Fairness', 'Findings', 'Reports'] as AnalysisSection[]).map((section) => {
+              const unavailable = (section === 'Calibration' && validationConfig.predictionType === 'score') || (section === 'Fairness' && validationConfig.sensitiveColumns.length === 0)
               const status = unavailable ? 'unavailable' : analysisStatus[section]
               return <button key={section} onClick={() => setActiveSection(section)}><span className={`nav-analysis-status ${status}`} /><strong>{section}</strong><small>{statusLabel(status)}</small></button>
             })}
@@ -2491,7 +2790,7 @@ function App() {
           </div>
 
           <div className="optional-setting stacked">
-            <div className="setting-copy"><h3>Sensitive attributes</h3><p>Mark columns such as sex or age for future fairness and bias analysis.</p><UsedBy modules={['Fairness']} /></div>
+            <div className="setting-copy"><h3>Sensitive attributes</h3><p>Mark columns such as sex or age for fairness and bias diagnostics. Continuous / ordinal attributes are split into three equal-frequency groups.</p><UsedBy modules={['Fairness']} /></div>
             <MultiColumnPicker columns={preview.columns} value={validationConfig.sensitiveColumns} onChange={(value) => setValidationConfig({...validationConfig, sensitiveColumns:value})} excluded={[validationConfig.predictionColumn, validationConfig.targetColumn]} />
           </div>
 
@@ -3903,10 +4202,11 @@ function App() {
         {activeSection === 'Discrimination' && renderDiscrimination()}
         {activeSection === 'Calibration' && renderCalibration()}
         {activeSection === 'Stability' && renderStability()}
+        {activeSection === 'Fairness' && renderFairness()}
         {activeSection === 'Findings' && renderFindings()}
         {activeSection === 'Reports' && renderReports()}
         {activeSection === 'Methodology' && renderMethodology()}
-        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Findings' && activeSection !== 'Reports' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
+        {activeSection !== 'Overview' && activeSection !== 'Data' && activeSection !== 'Validation' && activeSection !== 'EDA' && activeSection !== 'Discrimination' && activeSection !== 'Calibration' && activeSection !== 'Stability' && activeSection !== 'Fairness' && activeSection !== 'Findings' && activeSection !== 'Reports' && activeSection !== 'Methodology' && renderAnalysisPage(activeSection)}
       </main>
     </div>
   )

@@ -8,6 +8,7 @@ from app.calibration import run_calibration
 from app.dataset_io import MAX_ROWS, register_dataset
 from app.discrimination import run_discrimination
 from app.eda import run_eda
+from app.fairness import run_fairness
 from app.stability import run_stability
 from app.validation import run_validation
 
@@ -177,3 +178,16 @@ async def stability_run(
     config: str = Form(...),
 ) -> dict[str, object]:
     return await run_stability(dataset_id=dataset_id, config=config)
+
+
+@app.post("/fairness/run")
+async def fairness_run(
+    dataset_id: str = Form(...),
+    config: str = Form(...),
+    high_risk_share: float = Form(0.20),
+) -> dict[str, object]:
+    return await run_fairness(
+        dataset_id=dataset_id,
+        config=config,
+        high_risk_share=high_risk_share,
+    )

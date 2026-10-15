@@ -55,6 +55,22 @@ export type ReportInput = {
     variable: string
     psi: number
   }[]
+  fairness: {
+    attribute: string
+    mode: 'quantiles' | 'categories'
+    demographicParityGap: number | null
+    disparateImpactRatio: number | null
+    equalizedOddsGap: number | null
+    aucGap: number | null
+    groups: {
+      value: string
+      observations: number
+      defaultRate: number
+      favorableSelectionRate: number
+      auc: number | null
+      calibrationGap: number | null
+    }[]
+  }[]
   dataQuality: null | {
     missingRate: number
     duplicateRows: number
@@ -160,6 +176,25 @@ export const generateSelfContainedReport = (input: ReportInput) => {
         'Observed default rate',
       )
     : ''
+
+  const fairnessSections = input.fairness.map((attribute) => `
+    <section class="card">
+      <p class="eyebrow">Fairness</p>
+      <h2>${esc(attribute.attribute)}</h2>
+      <div class="grid">
+        <div class="metric"><span>Demographic parity gap</span><strong>${pct(attribute.demographicParityGap)}</strong></div>
+        <div class="metric"><span>Disparate impact ratio</span><strong>${num(attribute.disparateImpactRatio)}</strong></div>
+        <div class="metric"><span>Equalized odds gap</span><strong>${pct(attribute.equalizedOddsGap)}</strong></div>
+        <div class="metric"><span>AUC gap</span><strong>${num(attribute.aucGap)}</strong></div>
+      </div>
+      <p class="muted" style="margin-top:12px">Grouping: ${attribute.mode === 'quantiles' ? 'three approximately equal-frequency groups' : 'categorical groups'}.</p>
+      <table>
+        <thead><tr><th>Group</th><th>N</th><th>Default rate</th><th>Favorable selection</th><th>AUC</th><th>DR − PD</th></tr></thead>
+        <tbody>
+          ${attribute.groups.map((group) => `<tr><td><strong>${esc(group.value)}</strong></td><td>${group.observations.toLocaleString()}</td><td>${pct(group.defaultRate)}</td><td>${pct(group.favorableSelectionRate)}</td><td>${num(group.auc)}</td><td>${group.calibrationGap === null ? '—' : pct(group.calibrationGap)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </section>`).join('')
 
   const findingsRows = input.findings.length
     ? input.findings.map((finding) => `
@@ -276,6 +311,8 @@ export const generateSelfContainedReport = (input: ReportInput) => {
     <div class="chart-grid">${roc}${calibration}</div>
     ${input.stability.length ? stabilityBars(input.stability) : ''}
   </section>
+
+  ${fairnessSections}
 
   <section class="card">
     <p class="eyebrow">Findings</p>
