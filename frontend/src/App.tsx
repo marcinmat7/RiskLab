@@ -1002,6 +1002,10 @@ function App() {
   const [stabilityComparison, setStabilityComparison] = useState('')
   const [stabilityVariable, setStabilityVariable] = useState('')
   const [stabilityGranularity, setStabilityGranularity] = useState<TimeGranularity>('monthly')
+  const [fairnessResult, setFairnessResult] = useState<FairnessResult | null>(null)
+  const [fairnessError, setFairnessError] = useState<string | null>(null)
+  const [fairnessAttribute, setFairnessAttribute] = useState('')
+  const [fairnessHighRiskShare, setFairnessHighRiskShare] = useState(0.20)
   const [validationConfigMessage, setValidationConfigMessage] = useState<ValidationConfigMessage | null>(null)
   const [validationParsingWarnings, setValidationParsingWarnings] = useState<ValidationParsingWarning[]>([])
   const [validationRunError, setValidationRunError] = useState<string | null>(null)
@@ -1072,6 +1076,10 @@ function App() {
     setStabilityComparison('')
     setStabilityVariable('')
     setStabilityGranularity('monthly')
+    setFairnessResult(null)
+    setFairnessError(null)
+    setFairnessAttribute('')
+    setFairnessHighRiskShare(0.20)
     setValidationConfigMessage(null)
     setValidationParsingWarnings([])
     setValidationRunError(null)
@@ -1100,6 +1108,9 @@ function App() {
     setStabilityReference('')
     setStabilityComparison('')
     setStabilityVariable('')
+    setFairnessResult(null)
+    setFairnessError(null)
+    setFairnessAttribute('')
     setEdaTab('Overview')
     setDistributionDetailColumn('')
     setPopulationColumn('')
@@ -1343,6 +1354,7 @@ function App() {
     if (section === 'Validation' && !requiredConfigReady) return
     if (section !== 'Validation' && !validationReady) return
     if (section === 'Calibration' && validationConfig.predictionType === 'score') return
+    if (section === 'Fairness' && validationConfig.sensitiveColumns.length === 0) return
 
     setAnalysisStatus((current) => ({ ...current, [section]: 'running' }))
     window.setTimeout(() => {
@@ -1350,7 +1362,13 @@ function App() {
         const next = { ...current, [section]: 'ready' as AnalysisStatus }
         if (section === 'Validation') {
           analysisSections.forEach((item) => {
-            if (item !== 'Validation') next[item] = item === 'Calibration' && validationConfig.predictionType === 'score' ? 'unavailable' : 'not-run'
+            if (item !== 'Validation') {
+              next[item] = item === 'Calibration' && validationConfig.predictionType === 'score'
+                ? 'unavailable'
+                : item === 'Fairness' && validationConfig.sensitiveColumns.length === 0
+                  ? 'unavailable'
+                  : 'not-run'
+            }
           })
         }
         return next
@@ -1392,7 +1410,9 @@ function App() {
           if (item !== 'Validation') {
             next[item] = item === 'Calibration' && validationConfig.predictionType === 'score'
               ? 'unavailable'
-              : 'not-run'
+              : item === 'Fairness' && validationConfig.sensitiveColumns.length === 0
+                ? 'unavailable'
+                : 'not-run'
           }
         })
         return next
